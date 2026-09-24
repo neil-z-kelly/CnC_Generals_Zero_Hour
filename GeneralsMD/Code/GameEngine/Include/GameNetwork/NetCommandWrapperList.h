@@ -40,6 +40,7 @@ public:
 	//virtual ~NetCommandWrapperListNode();
 
 	Bool isComplete();
+	Bool isValid();
 	UnsignedShort getCommandID();
 	UnsignedInt getRawDataLength();
 	void copyChunkData(NetWrapperCommandMsg *msg);
@@ -56,6 +57,7 @@ protected:
 	Bool *m_chunksPresent;
 	UnsignedInt m_numChunks;
 	UnsignedInt m_numChunksPresent;
+	Bool m_isValid;
 
 };
 
