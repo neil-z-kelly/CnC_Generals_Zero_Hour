@@ -118,7 +118,7 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
 				msg = readWrapperMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
+				msg = readFileMessage(data, offset, dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
 				msg = readFileAnnounceMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
@@ -129,6 +129,11 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 				msg = readDisconnectScreenOffMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FRAMERESENDREQUEST) {
 				msg = readFrameResendRequestMessage(data, offset);
+			}
+
+			if (msg == NULL) {
+				DEBUG_LOG(("NetPacket::ConstructNetCommandMsgFromRawData - could not read a command of type %d\n", commandType));
+				return NULL;
 			}
 
 			msg->setExecutionFrame(frame);
@@ -5061,7 +5066,7 @@ NetCommandList * NetPacket::getCommandList() {
 				break;
 			case NETCOMMANDTYPE_FILE:
 				DEBUG_LOG(("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
+				msg = readFileMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEANNOUNCE:
 				DEBUG_LOG(("read file announce message from player %d\n", playerID));
@@ -5697,23 +5702,46 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i, Int dataAvailable) {
 	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
 	char filename[_MAX_PATH];
-	char *c = filename;
+	Int filenameLength = 0;
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+	while ((i < dataAvailable) && (data[i] != 0) && (filenameLength < (_MAX_PATH - 1))) {
+		filename[filenameLength] = data[i];
+		++filenameLength;
 		++i;
 	}
-	*c = 0;
+
+	if ((i >= dataAvailable) || (data[i] != 0)) {
+		// the filename isn't terminated within the data we actually received, the message is bogus.
+		DEBUG_LOG(("NetPacket::readFileMessage - unterminated filename, discarding message\n"));
+		i = dataAvailable;
+		msg->detach();
+		return NULL;
+	}
+
+	filename[filenameLength] = 0;
 	++i;
 	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedInt dataLength = 0;
+	if ((dataAvailable - i) < (Int)sizeof(dataLength)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - truncated file data length, discarding message\n"));
+		i = dataAvailable;
+		msg->detach();
+		return NULL;
+	}
 	memcpy(&dataLength, data + i, sizeof(dataLength));
 	i += sizeof(dataLength);
+
+	if (dataLength > (UnsignedInt)(dataAvailable - i)) {
+		// the sender claims more file data than was actually received, don't allocate or copy it.
+		DEBUG_LOG(("NetPacket::readFileMessage - file data length %d exceeds the %d bytes remaining, discarding message\n", dataLength, dataAvailable - i));
+		i = dataAvailable;
+		msg->detach();
+		return NULL;
+	}
 
 	UnsignedByte *buf = NEW UnsignedByte[dataLength];
 	memcpy(buf, data + i, dataLength);
