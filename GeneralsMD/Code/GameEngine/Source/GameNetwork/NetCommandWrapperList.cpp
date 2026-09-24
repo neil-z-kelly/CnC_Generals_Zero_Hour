@@ -34,6 +34,43 @@
 ////// NetCommandWrapperListNode ///////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Wrapped commands are only used for data that doesn't fit in a single packet, the largest
+// being file transfers, so this bound is generous while keeping the reassembly allocation sane.
+static const UnsignedInt MAX_WRAPPED_COMMAND_LENGTH = 8 * 1024 * 1024;
+
+Bool NetCommandWrapperListNode::isValidWrapperMsg(NetWrapperCommandMsg *msg) {
+	if (msg == NULL) {
+		return FALSE;
+	}
+
+	UnsignedInt totalDataLength = msg->getTotalDataLength();
+	if ((totalDataLength == 0) || (totalDataLength > MAX_WRAPPED_COMMAND_LENGTH)) {
+		return FALSE;
+	}
+
+	// every chunk carries at least one byte, so there can't be more chunks than bytes.
+	UnsignedInt numChunks = msg->getNumChunks();
+	if ((numChunks == 0) || (numChunks > totalDataLength)) {
+		return FALSE;
+	}
+
+	if (msg->getChunkNumber() >= numChunks) {
+		return FALSE;
+	}
+
+	UnsignedInt dataLength = msg->getDataLength();
+	if ((dataLength == 0) || (dataLength > totalDataLength) || (msg->getData() == NULL)) {
+		return FALSE;
+	}
+
+	// written as a subtraction so it can't overflow.
+	if (msg->getDataOffset() > (totalDataLength - dataLength)) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 NetCommandWrapperListNode::NetCommandWrapperListNode(NetWrapperCommandMsg *msg) 
 {
 	//Added By Sadullah Nader
@@ -66,6 +103,14 @@ NetCommandWrapperListNode::~NetCommandWrapperListNode() {
 		delete[] m_data;
 		m_data = NULL;
 	}
+}
+
+Bool NetCommandWrapperListNode::isConsistentWith(NetWrapperCommandMsg *msg) {
+	if (msg == NULL) {
+		return FALSE;
+	}
+
+	return (msg->getNumChunks() == m_numChunks) && (msg->getTotalDataLength() == m_dataLength);
 }
 
 Bool NetCommandWrapperListNode::isComplete() {
@@ -106,9 +151,19 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 		return;
 	}
 
-	m_chunksPresent[msg->getChunkNumber()] = TRUE;
 	UnsignedInt offset = msg->getDataOffset();
-	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
+	UnsignedInt dataLength = msg->getDataLength();
+
+	// the chunk has to fit entirely inside the buffer we allocated for the wrapped command.
+	// the second test is written as a subtraction so it can't overflow.
+	if ((msg->getData() == NULL) || (dataLength > m_dataLength) || (offset > (m_dataLength - dataLength))) {
+		DEBUG_CRASH(("NetCommandWrapperListNode::copyChunkData() - chunk %d (offset %d, length %d) doesn't fit in the %d byte command buffer",
+			msg->getChunkNumber(), offset, dataLength, m_dataLength));
+		return;
+	}
+
+	m_chunksPresent[msg->getChunkNumber()] = TRUE;
+	memcpy(m_data + offset, msg->getData(), dataLength);
 	++m_numChunksPresent;
 }
 
@@ -164,6 +219,13 @@ void NetCommandWrapperList::processWrapper(NetCommandRef *ref) {
 	NetCommandWrapperListNode *temp = m_list;
 	NetWrapperCommandMsg *msg = (NetWrapperCommandMsg *)(ref->getCommand());
 
+	// the chunk description comes straight off the wire, so validate it before it is
+	// used to size allocations or to index into the reassembly buffer.
+	if (!NetCommandWrapperListNode::isValidWrapperMsg(msg)) {
+		DEBUG_LOG(("NetCommandWrapperList::processWrapper() - discarding malformed wrapper command\n"));
+		return;
+	}
+
 	while ((temp != NULL) && (temp->getCommandID() != msg->getWrappedCommandID())) {
 		temp = temp->m_next;
 	}
@@ -172,6 +234,11 @@ void NetCommandWrapperList::processWrapper(NetCommandRef *ref) {
 		temp = newInstance(NetCommandWrapperListNode)(msg);
 		temp->m_next = m_list;
 		m_list = temp;
+	} else if (!temp->isConsistentWith(msg)) {
+		// a later chunk that disagrees about the size of the command can't belong to it.
+		DEBUG_LOG(("NetCommandWrapperList::processWrapper() - discarding wrapper chunk that doesn't match command %d\n",
+			msg->getWrappedCommandID()));
+		return;
 	}
 
 	temp->copyChunkData(msg);

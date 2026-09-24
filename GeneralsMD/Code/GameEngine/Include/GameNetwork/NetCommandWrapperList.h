@@ -39,6 +39,13 @@ public:
 	NetCommandWrapperListNode(NetWrapperCommandMsg *msg);
 	//virtual ~NetCommandWrapperListNode();
 
+	// returns TRUE if the chunk description in msg is self-consistent and within
+	// the limits allowed for a reassembled command.
+	static Bool isValidWrapperMsg(NetWrapperCommandMsg *msg);
+
+	// returns TRUE if msg describes the same logical command as this node.
+	Bool isConsistentWith(NetWrapperCommandMsg *msg);
+
 	Bool isComplete();
 	UnsignedShort getCommandID();
 	UnsignedInt getRawDataLength();
