@@ -313,6 +313,51 @@ void LANAPI::checkMOTD( void )
 #endif
 }
 
+// The fixed-size string fields of a LANMessage come off the wire with no guarantee
+// of NUL termination.  Force a terminator into the last element of every field a
+// handler may read, so the string constructors cannot scan past the field.
+static void terminateStringFields( LANMessage *msg )
+{
+	msg->name[g_lanPlayerNameLength] = 0;
+	msg->userName[g_lanLoginNameLength] = 0;
+	msg->hostName[g_lanHostNameLength] = 0;
+
+	switch (msg->LANMessageType)
+	{
+	case LANMessage::MSG_GAME_ANNOUNCE:
+		msg->GameInfo.gameName[g_lanGameNameLength] = 0;
+		msg->GameInfo.options[m_lanMaxOptionsLength] = 0;
+		break;
+	case LANMessage::MSG_REQUEST_JOIN:
+		msg->GameToJoin.serial[g_maxSerialLength-1] = 0;
+		break;
+	case LANMessage::MSG_JOIN_ACCEPT:
+		msg->GameJoined.gameName[g_lanGameNameLength] = 0;
+		break;
+	case LANMessage::MSG_JOIN_DENY:
+		msg->GameNotJoined.gameName[g_lanGameNameLength] = 0;
+		break;
+	case LANMessage::MSG_REQUEST_GAME_LEAVE:
+		msg->GameToLeave.gameName[g_lanGameNameLength] = 0;
+		break;
+	case LANMessage::MSG_SET_ACCEPT:
+		msg->Accept.gameName[g_lanGameNameLength] = 0;
+		break;
+	case LANMessage::MSG_MAP_AVAILABILITY:
+		msg->MapStatus.gameName[g_lanGameNameLength] = 0;
+		break;
+	case LANMessage::MSG_CHAT:
+		msg->Chat.gameName[g_lanGameNameLength] = 0;
+		msg->Chat.message[g_lanMaxChatLength] = 0;
+		break;
+	case LANMessage::MSG_GAME_OPTIONS:
+		msg->GameOptions.options[m_lanMaxOptionsLength] = 0;
+		break;
+	default:
+		break;
+	}
+}
+
 extern Bool LANbuttonPushed;
 extern Bool LANSocketErrorDetected;
 void LANAPI::update( void )
@@ -352,7 +397,16 @@ void LANAPI::update( void )
 				continue;
 			}
 
+			if (m_transport->m_inBuffer[i].length != sizeof(LANMessage))
+			{
+				DEBUG_LOG(("LANAPI::update - discarding %d-byte message from 0x%08x (expected %d)\n",
+					m_transport->m_inBuffer[i].length, senderIP, sizeof(LANMessage)));
+				m_transport->m_inBuffer[i].length = 0;
+				continue;
+			}
+
 			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
+			terminateStringFields( msg );
 			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)\n", GetMessageTypeString(msg->LANMessageType).str(),
 			//	msg->name, msg->userName, msg->hostName));
 			switch (msg->LANMessageType)
