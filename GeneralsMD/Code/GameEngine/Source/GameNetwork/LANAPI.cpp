@@ -352,6 +352,15 @@ void LANAPI::update( void )
 				continue;
 			}
 
+			if (m_transport->m_inBuffer[i].length != (Int)sizeof(LANMessage))
+			{
+				// not one of ours - every LAN message we send is a full LANMessage
+				DEBUG_LOG(("LANAPI::update - discarding %d byte message from 0x%08x (expected %d)\n",
+					m_transport->m_inBuffer[i].length, senderIP, (Int)sizeof(LANMessage)));
+				m_transport->m_inBuffer[i].length = 0;
+				continue;
+			}
+
 			LANMessage *msg = (LANMessage *)(m_transport->m_inBuffer[i].data);
 			//DEBUG_LOG(("LAN message type %s from %ls (%s@%s)\n", GetMessageTypeString(msg->LANMessageType).str(),
 			//	msg->name, msg->userName, msg->hostName));
