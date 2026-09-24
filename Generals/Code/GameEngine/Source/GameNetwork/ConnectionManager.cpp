@@ -299,7 +299,15 @@ Int ConnectionManager::getPingsRecieved()
 
 Bool ConnectionManager::isPlayerConnected( Int playerID )
 {
-	return ( playerID == m_localSlot || (m_connections[playerID] && !m_connections[playerID]->isQuitting()) );
+	if (playerID == m_localSlot) {
+		return TRUE;
+	}
+
+	if ((playerID < 0) || (playerID >= MAX_SLOTS)) {
+		return FALSE;
+	}
+
+	return ( m_connections[playerID] && !m_connections[playerID]->isQuitting() );
 }
 
 void ConnectionManager::attachTransport(Transport *transport) {
@@ -429,7 +437,14 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 		return FALSE;
 	}
 
-	if ((m_connections[msg->getPlayerID()] == NULL) && (msg->getPlayerID() != m_localSlot)) {
+	// The player ID is copied verbatim out of the packet, so it has to be range checked
+	// before it is used to index any of the per-slot arrays.
+	Int playerID = msg->getPlayerID();
+	if ((playerID < 0) || (playerID >= MAX_SLOTS)) {
+		return TRUE;
+	}
+
+	if ((m_connections[playerID] == NULL) && (playerID != m_localSlot)) {
 		// if this is from a player that is no longer in the game, then ignore them.
 		return TRUE;
 	}
@@ -439,8 +454,8 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 		return FALSE;
 	}
 
-	if ((msg->getPlayerID() >= 0) && (msg->getPlayerID() < MAX_SLOTS) && (msg->getPlayerID() != m_localSlot)) {
-		if (m_connections[msg->getPlayerID()] == NULL) {
+	if (playerID != m_localSlot) {
+		if (m_connections[playerID] == NULL) {
 			return TRUE;
 		}
 	}
@@ -783,9 +798,14 @@ void ConnectionManager::processFileProgress(NetFileProgressCommandMsg *msg)
 {
 	DEBUG_LOG(("ConnectionManager::processFileProgress() - command %d is at %d%%\n",
 		msg->getFileID(), msg->getProgress()));
-	Int oldProgress = s_fileProgressMap[msg->getPlayerID()][msg->getFileID()];
+	Int playerID = msg->getPlayerID();
+	if ((playerID < 0) || (playerID >= MAX_SLOTS)) {
+		return;
+	}
 
-	s_fileProgressMap[msg->getPlayerID()][msg->getFileID()] = max(oldProgress, msg->getProgress());
+	Int oldProgress = s_fileProgressMap[playerID][msg->getFileID()];
+
+	s_fileProgressMap[playerID][msg->getFileID()] = max(oldProgress, msg->getProgress());
 }
 
 void ConnectionManager::processProgress( NetProgressCommandMsg *msg )
