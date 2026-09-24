@@ -38,6 +38,15 @@
 //#pragma MESSAGE("************************************** WARNING, optimization disabled for debugging purposes")
 #endif
 
+// Returns TRUE if numBytes bytes can be read at offset i without running past the
+// dataAvailable bytes the buffer actually holds.
+static Bool isRoomInBuffer(Int i, Int dataAvailable, UnsignedInt numBytes) {
+	if ((i < 0) || (i > dataAvailable)) {
+		return FALSE;
+	}
+	return numBytes <= (UnsignedInt)(dataAvailable - i);
+}
+
 // This function assumes that all of the fields are either of default value or are
 // present in the raw data.
 NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data, UnsignedShort dataLength) {
@@ -116,9 +125,9 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			} else if (commandType == NETCOMMANDTYPE_TIMEOUTSTART) {
 				msg = readTimeOutGameStartMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
-				msg = readWrapperMessage(data, offset);
+				msg = readWrapperMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
+				msg = readFileMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
 				msg = readFileAnnounceMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
@@ -5055,13 +5064,13 @@ NetCommandList * NetPacket::getCommandList() {
 				break;
 			case NETCOMMANDTYPE_WRAPPER:
 				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read Wrapper message from player %d\n", playerID));
-				msg = readWrapperMessage(m_packet, i);
+				msg = readWrapperMessage(m_packet, i, m_packetLen);
 				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Done reading Wrapper message from player %d - wrapped command was %d\n", playerID,
 					((NetWrapperCommandMsg *)msg)->getWrappedCommandID()));
 				break;
 			case NETCOMMANDTYPE_FILE:
 				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
+				msg = readFileMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEANNOUNCE:
 				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read file announce message from player %d\n", playerID));
@@ -5648,8 +5657,16 @@ NetCommandMsg * NetPacket::readTimeOutGameStartMessage(UnsignedByte *data, Int &
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i, Int dataAvailable) {
 	NetWrapperCommandMsg *msg = newInstance(NetWrapperCommandMsg);
+
+	// the fixed size fields all have to be within the bytes we actually received.
+	const UnsignedInt headerSize = sizeof(UnsignedShort) + (5 * sizeof(UnsignedInt));
+	if (!isRoomInBuffer(i, dataAvailable, headerSize)) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - packet is too short to hold a wrapper header, discarding the rest of the packet\n"));
+		i = dataAvailable;
+		return msg;
+	}
 
 	// get the wrapped command ID
 	UnsignedShort wrappedCommandID = 0;
@@ -5691,35 +5708,58 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 	i += sizeof(dataOffset);
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - data offset = %d\n", dataOffset));
 
+	if (!isRoomInBuffer(i, dataAvailable, dataLength)) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - chunk data length %d is bigger than the %d bytes left in the packet, discarding the rest of the packet\n",
+			dataLength, dataAvailable - i));
+		i = dataAvailable;
+		return msg;
+	}
+
 	msg->setData(data + i, dataLength);
 	i += dataLength;
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i, Int dataAvailable) {
 	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
 	char filename[_MAX_PATH];
-	char *c = filename;
+	Int filenameLen = 0;
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+	while ((i < dataAvailable) && (data[i] != 0) && (filenameLen < (_MAX_PATH - 1))) {
+		filename[filenameLen] = data[i];
+		++filenameLen;
 		++i;
 	}
-	*c = 0;
+	filename[filenameLen] = 0;
+
+	if ((i >= dataAvailable) || (data[i] != 0)) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readFileMessage - filename isn't terminated within the packet, discarding the rest of the packet\n"));
+		i = dataAvailable;
+		return msg;
+	}
 	++i;
 	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+
+	if (!isRoomInBuffer(i, dataAvailable, sizeof(UnsignedInt))) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readFileMessage - packet is too short to hold the file data length, discarding the rest of the packet\n"));
+		i = dataAvailable;
+		return msg;
+	}
 
 	UnsignedInt dataLength = 0;
 	memcpy(&dataLength, data + i, sizeof(dataLength));
 	i += sizeof(dataLength);
 
-	UnsignedByte *buf = NEW UnsignedByte[dataLength];
-	memcpy(buf, data + i, dataLength);
-	i += dataLength;
+	if (!isRoomInBuffer(i, dataAvailable, dataLength)) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readFileMessage - file data length %d is bigger than the %d bytes left in the packet, discarding the rest of the packet\n",
+			dataLength, dataAvailable - i));
+		i = dataAvailable;
+		return msg;
+	}
 
-	msg->setFileData(buf, dataLength);
+	msg->setFileData(data + i, dataLength);
+	i += dataLength;
 
 	return msg;
 }

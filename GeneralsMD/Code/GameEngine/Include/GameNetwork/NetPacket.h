@@ -210,8 +210,8 @@ protected:
 	static NetCommandMsg * readProgressMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readLoadCompleteMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readTimeOutGameStartMessage(UnsignedByte *data, Int &i);
-	static NetCommandMsg * readWrapperMessage(UnsignedByte *data, Int &i);
-	static NetCommandMsg * readFileMessage(UnsignedByte *data, Int &i);
+	static NetCommandMsg * readWrapperMessage(UnsignedByte *data, Int &i, Int dataAvailable);
+	static NetCommandMsg * readFileMessage(UnsignedByte *data, Int &i, Int dataAvailable);
 	static NetCommandMsg * readFileAnnounceMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readFileProgressMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readDisconnectFrameMessage(UnsignedByte *data, Int &i);
