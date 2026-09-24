@@ -610,7 +610,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 		{
 			GameInfo *game = TheLAN->GetMyGame();
 			DEBUG_ASSERTCRASH(game, ("Starting a LAN game with no LANGameInfo object!"));
-			theSlotList = GameInfoToAsciiString(game);
+			theSlotList = GameInfoToAsciiString(game, FALSE);
 
 			for (Int i=0; i<MAX_SLOTS; ++i)
 			{
@@ -623,7 +623,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 		}
 		else
 		{
-			theSlotList = GameInfoToAsciiString(TheGameSpyGame);
+			theSlotList = GameInfoToAsciiString(TheGameSpyGame, FALSE);
 			localIndex = TheGameSpyGame->getLocalSlotNum();
 		}
 	}
@@ -632,7 +632,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
     if(TheSkirmishGameInfo)
     {
 			TheSkirmishGameInfo->setCRCInterval(REPLAY_CRC_INTERVAL);
-      theSlotList = GameInfoToAsciiString(TheSkirmishGameInfo);
+      theSlotList = GameInfoToAsciiString(TheSkirmishGameInfo, FALSE);
       DEBUG_LOG(("GameInfo String: %s\n",theSlotList.str()));
 			localIndex = 0;
     }
@@ -640,7 +640,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
     {
 		  // single player.  format the generic (empty) slotlist
 			m_gameInfo.setCRCInterval(REPLAY_CRC_INTERVAL);
-		  theSlotList = GameInfoToAsciiString(&m_gameInfo);
+		  theSlotList = GameInfoToAsciiString(&m_gameInfo, FALSE);
     }
 	}
 	logGameStart(theSlotList);

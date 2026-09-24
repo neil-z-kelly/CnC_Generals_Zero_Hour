@@ -309,6 +309,7 @@ void GameInfo::reset( void )
 	m_mapName = AsciiString("NOMAP");
 	m_mapMask = 0;
 	m_seed = GetTickCount(); //GameClientRandomValue(0, INT_MAX - 1);
+	clearSessionKey();
 	m_useStats = TRUE;
 	m_surrendered = FALSE;
   m_oldFactionsOnly = FALSE;
@@ -691,6 +692,52 @@ void GameInfo::setSeed( Int seed )
 	m_seed = seed;
 }
 
+/**
+ * Generate the secret that the transport layer keys its packet MACs with.  This
+ * is called by the host when it creates a game; joining players pick the key up
+ * from the game options.
+ */
+void GameInfo::generateSessionKey( void )
+{
+	// Mix several independent sources, so that the key cannot be derived from a
+	// single observable value (the game seed, for instance, is sent in the clear).
+	// The game's own random generators are deliberately not used here: they are
+	// seeded from values that are shared with the other players.
+	LARGE_INTEGER perf1, perf2;
+	QueryPerformanceCounter(&perf1);
+	UnsignedInt entropy[4];
+	entropy[0] = (UnsignedInt)perf1.LowPart;
+	entropy[1] = (UnsignedInt)perf1.HighPart ^ GetTickCount();
+	entropy[2] = (UnsignedInt)GetCurrentProcessId() ^ (UnsignedInt)this;
+	QueryPerformanceCounter(&perf2);
+	entropy[3] = (UnsignedInt)perf2.LowPart ^ (UnsignedInt)GetCurrentThreadId();
+
+	for (Int i = 0; i < TRANSPORT_SESSION_KEY_LEN; ++i)
+	{
+		UnsignedInt word = entropy[i / 4];
+		m_sessionKey[i] = (UnsignedByte)((word >> ((i % 4) * 8)) & 0xff);
+	}
+	m_hasSessionKey = TRUE;
+}
+
+void GameInfo::setSessionKey( const UnsignedByte *key )
+{
+	if (!key)
+	{
+		clearSessionKey();
+		return;
+	}
+
+	memcpy(m_sessionKey, key, TRANSPORT_SESSION_KEY_LEN);
+	m_hasSessionKey = TRUE;
+}
+
+void GameInfo::clearSessionKey( void )
+{
+	memset(m_sessionKey, 0, sizeof(m_sessionKey));
+	m_hasSessionKey = FALSE;
+}
+
 void GameInfo::setSlotPointer( Int index, GameSlot *slot )
 {
 	if (index < 0 || index >= MAX_SLOTS)
@@ -896,7 +943,7 @@ Bool GameInfo::isSandbox(void)
 
 static const char slotListID		= 'S';
 
-AsciiString GameInfoToAsciiString( const GameInfo *game )
+AsciiString GameInfoToAsciiString( const GameInfo *game, Bool includeSessionKey )
 {
 	if (!game)
 		return AsciiString::TheEmptyString;
@@ -926,9 +973,25 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 	}
 
 	AsciiString optionsString;
-	optionsString.format("US=%d;M=%2.2x%s;MC=%X;MS=%d;SD=%d;C=%d;SR=%u;SC=%u;O=%c;", game->getUseStats(), game->getMapContentsMask(), newMapName.str(),
+	if (includeSessionKey && game->hasSessionKey())
+	{
+		const UnsignedByte *key = game->getSessionKey();
+		AsciiString keyString = "SK=";
+		for (Int keyByte = 0; keyByte < TRANSPORT_SESSION_KEY_LEN; ++keyByte)
+		{
+			AsciiString hex;
+			hex.format("%2.2x", key[keyByte]);
+			keyString.concat(hex);
+		}
+		keyString.concat(';');
+		optionsString = keyString;
+	}
+
+	AsciiString gameOptions;
+	gameOptions.format("US=%d;M=%2.2x%s;MC=%X;MS=%d;SD=%d;C=%d;SR=%u;SC=%u;O=%c;", game->getUseStats(), game->getMapContentsMask(), newMapName.str(),
 		game->getMapCRC(), game->getMapSize(), game->getSeed(), game->getCRCInterval(), game->getSuperweaponRestriction(),
 		game->getStartingCash().countMoney(), game->oldFactionsOnly() ? 'Y' : 'N' );
+	optionsString.concat(gameOptions);
 
 	//add player info for each slot
 	optionsString.concat(slotListID);
@@ -1015,6 +1078,8 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 	Int mapContentsMask;
 	UnsignedInt mapCRC, mapSize;
 	Int seed = 0;
+	UnsignedByte sessionKey[TRANSPORT_SESSION_KEY_LEN];
+	Bool sawSessionKey = FALSE;
 	Int crc = 100;
 	Bool sawCRC = FALSE;
   Bool oldFactionsOnly = FALSE;
@@ -1100,6 +1165,18 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 			seed = atoi(val.str());
 			sawSeed = true;
 //			DEBUG_LOG(("ParseAsciiStringToGameInfo - random seed is %d\n", seed));
+		}
+		else if (key.compare("SK") == 0)
+		{
+			if (val.getLength() != TRANSPORT_SESSION_KEY_LEN * 2)
+			{
+				optionsOk = false;
+				DEBUG_LOG(("ParseAsciiStringToGameInfo - session key is malformed, quitting\n"));
+				break;
+			}
+			for (Int keyByte = 0; keyByte < TRANSPORT_SESSION_KEY_LEN; ++keyByte)
+				sessionKey[keyByte] = (UnsignedByte)grabHexInt(val.str() + keyByte*2);
+			sawSessionKey = TRUE;
 		}
 		else if (key.compare("C") == 0)
 		{
@@ -1480,6 +1557,8 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		game->setMapSize(mapSize);
 		game->setMapContentsMask(mapContentsMask);
 		game->setSeed(seed);
+		if (sawSessionKey)
+			game->setSessionKey(sessionKey);
 		game->setCRCInterval(crc);
 		game->setUseStats(useStats);
     game->setSuperweaponRestriction(restriction);

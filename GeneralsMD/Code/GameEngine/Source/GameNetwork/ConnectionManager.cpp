@@ -1861,6 +1861,42 @@ void ConnectionManager::parseUserList(const GameInfo *game)
 	Int numUsers = 0;
 	m_localSlot = -1;
 	DEBUG_LOG(("Local slot is %d\n", game->getLocalSlotNum()));
+
+	// Hand the game's shared secret and its player addresses to the transport, so
+	// that packets from anyone outside the game are dropped before they are parsed.
+	if (m_transport)
+	{
+		if (game->hasSessionKey())
+		{
+			m_transport->setSessionKey(game->getSessionKey(), TRANSPORT_SESSION_KEY_LEN);
+		}
+		else
+		{
+			m_transport->clearSessionKey();
+			DEBUG_LOG(("ConnectionManager::parseUserList - game has no session key; packets are unauthenticated\n"));
+		}
+
+		m_transport->clearAllowedPeers();
+		Bool allAddressesKnown = TRUE;
+		for (i=0; i<MAX_SLOTS; ++i)
+		{
+			const GameSlot *peerSlot = game->getConstSlot(i);
+			if (peerSlot && peerSlot->isHuman())
+			{
+				if (peerSlot->getIP() == 0)
+					allAddressesKnown = FALSE;
+				else
+					m_transport->addAllowedPeer(peerSlot->getIP());
+			}
+		}
+		if (!allAddressesKnown)
+		{
+			// Filtering on a partial peer list would silently drop a player, so only
+			// filter when every player's address is known.
+			DEBUG_LOG(("ConnectionManager::parseUserList - not all player addresses are known; not filtering by source address\n"));
+			m_transport->clearAllowedPeers();
+		}
+	}
 	for (i=0; i<MAX_SLOTS; ++i)
 	{
 		const GameSlot *slot = game->getConstSlot(i);	// badness, but since we cast right back to const, we should be ok

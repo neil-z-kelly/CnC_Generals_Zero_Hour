@@ -194,6 +194,15 @@ public:
 	inline Int getMapContentsMask( void ) const;						///< Get the map contents mask
 	void setSeed( Int seed );													///< Set the random seed for the game
 	inline Int getSeed( void ) const;												///< Get the game seed
+
+	// Per-game secret used by the transport layer to authenticate packets.  The
+	// host generates one when it creates the game; it travels to the other
+	// players as part of the game options.
+	void generateSessionKey( void );
+	void setSessionKey( const UnsignedByte *key );
+	void clearSessionKey( void );
+	Bool hasSessionKey( void ) const { return m_hasSessionKey; }
+	const UnsignedByte *getSessionKey( void ) const { return m_sessionKey; }
 	inline Int getUseStats( void ) const;		///< Does this game count towards gamespy stats?
 	inline void setUseStats( Int useStats );
 
@@ -250,6 +259,8 @@ protected:
 	UnsignedInt m_mapSize;
 	Int m_mapMask;
 	Int m_seed;
+	UnsignedByte m_sessionKey[TRANSPORT_SESSION_KEY_LEN];
+	Bool m_hasSessionKey;
 	Int m_useStats;
   Money         m_startingCash;
   UnsignedShort m_superweaponRestriction;
@@ -276,7 +287,9 @@ UnsignedShort GameInfo::getSuperweaponRestriction( void ) const { return m_super
 Bool        GameInfo::oldFactionsOnly(void) const           { return m_oldFactionsOnly; }
 void        GameInfo::setOldFactionsOnly( Bool oldFactionsOnly ) { m_oldFactionsOnly = oldFactionsOnly; }
 
-AsciiString GameInfoToAsciiString( const GameInfo *game );
+// includeSessionKey should only be FALSE for strings that are persisted (replay
+// headers, preferences) rather than handed to the other players in the game.
+AsciiString GameInfoToAsciiString( const GameInfo *game, Bool includeSessionKey = TRUE );
 Bool ParseAsciiStringToGameInfo( GameInfo *game, AsciiString options );
 
 
