@@ -677,6 +677,41 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 	}
 }
 
+/**
+ * Filenames in file transfer commands come off the wire and are completely untrusted.
+ * Only names that stay inside the map directories, with an extension we actually transfer
+ * during a map transfer, are acceptable.  Anything with a drive letter, a forward slash,
+ * a leading backslash or a ".." component is rejected outright.
+ */
+static Bool isAcceptablePortableTransferFilename(const AsciiString& portableFilename)
+{
+	if (portableFilename.isEmpty())
+		return FALSE;
+
+	// must live under one of the map directories.  Save games are never transferred.
+	if (!portableFilename.startsWithNoCase("Maps\\") && !portableFilename.startsWithNoCase("UserData\\Maps\\"))
+		return FALSE;
+
+	const char *name = portableFilename.str();
+	for (const char *c = name; *c != 0; ++c)
+	{
+		if (*c == '/' || *c == ':' || *c == '*' || *c == '?' || *c == '"' || *c == '<' || *c == '>' || *c == '|')
+			return FALSE;
+
+		// no parent-directory components
+		if (*c == '.' && *(c + 1) == '.' && (c == name || *(c - 1) == '\\') && (*(c + 2) == 0 || *(c + 2) == '\\'))
+			return FALSE;
+
+		// no empty components (which also catches a trailing separator)
+		if (*c == '\\' && (*(c + 1) == 0 || *(c + 1) == '\\'))
+			return FALSE;
+	}
+
+	return portableFilename.endsWithNoCase(".map") || portableFilename.endsWithNoCase(".tga") ||
+		portableFilename.endsWithNoCase(".ini") || portableFilename.endsWithNoCase(".str") ||
+		portableFilename.endsWithNoCase(".txt");
+}
+
 void ConnectionManager::processFile(NetFileCommandMsg *msg) 
 {
 #ifdef _INTERNAL
@@ -685,10 +720,17 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls\n", log.str()));
 #endif
 
-	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
+	if (!isAcceptablePortableTransferFilename(msg->getPortableFilename()))
 	{
-		DEBUG_LOG(("File exists already!\n"));
-		//return;
+		DEBUG_LOG(("ConnectionManager::processFile() - refusing file transfer with unacceptable filename '%s' from %d\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
+	const Bool fileExists = TheFileSystem->doesFileExist(msg->getRealFilename().str());
+	if (fileExists)
+	{
+		DEBUG_LOG(("File exists already - not overwriting it with the transferred copy!\n"));
 	}
 
 	UnsignedByte *buf = msg->getFileData();
@@ -717,18 +759,21 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	}
 #endif // COMPRESS_TARGAS
 
-	File *fp = TheFileSystem->openFile(msg->getRealFilename().str(), File::CREATE | File::BINARY | File::WRITE);
-	if (fp)
+	if (!fileExists)
 	{
-		fp->write(buf, len);
-		fp->close();
-		fp = NULL;
-		DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,msg->getRealFilename().str()));
+		File *fp = TheFileSystem->openFile(msg->getRealFilename().str(), File::CREATE | File::BINARY | File::WRITE);
+		if (fp)
+		{
+			fp->write(buf, len);
+			fp->close();
+			fp = NULL;
+			DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,msg->getRealFilename().str()));
 
-	}
-	else
-	{
-		DEBUG_LOG(("Cannot open file!\n"));
+		}
+		else
+		{
+			DEBUG_LOG(("Cannot open file!\n"));
+		}
 	}
 
 	DEBUG_LOG(("ConnectionManager::processFile() - sending a NetFileProgressCommandMsg\n"));
