@@ -899,9 +899,57 @@ AsciiString GameState::realMapPathToPortableMapPath(const AsciiString& in) const
 }
 
 // ------------------------------------------------------------------------------------------------
+/**
+	Portable map paths can come from untrusted sources (network file transfers, save game
+	headers), so they must never be usable to reach outside of the directory they are
+	resolved against. Rejects absolute paths, drive letters, UNC paths, forward slashes,
+	empty or traversal ("." / "..") components, and characters that are illegal in a filename.
+*/
+static Bool isSafePortableMapPath(const AsciiString& in)
+{
+	const char* start = in.str();
+	if (start == NULL || *start == 0)
+		return FALSE;
+
+	if (*start == '\\' || *start == '/')
+		return FALSE;
+
+	const char* component = start;
+	for (const char* c = start; ; ++c)
+	{
+		if (*c == '\\' || *c == 0)
+		{
+			const Int len = c - component;
+			if (len == 0)
+				return FALSE;
+			if (len == 1 && component[0] == '.')
+				return FALSE;
+			if (len == 2 && component[0] == '.' && component[1] == '.')
+				return FALSE;
+			if (*c == 0)
+				break;
+			component = c + 1;
+		}
+		else if (((unsigned char)*c < 32) || (*c == ':') || (*c == '/') || (*c == '*') ||
+						 (*c == '?') || (*c == '"') || (*c == '<') || (*c == '>') || (*c == '|'))
+		{
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+// ------------------------------------------------------------------------------------------------
 AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in) const
 {
 	AsciiString prefix;
+	if (!isSafePortableMapPath(in))
+	{
+		DEBUG_LOG(("portableMapPathToRealMapPath - rejecting unsafe portable path '%s'\n", in.str()));
+		return AsciiString::TheEmptyString;
+	}
+
 	if (in.startsWithNoCase(PORTABLE_SAVE))
 	{
 		// the save dir ends with "\\"
@@ -924,10 +972,10 @@ AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in) const
 	}
 	else
 	{
-		DEBUG_CRASH(("Map file was not found in any of the expected directories; this is impossible"));
-		//throw INI_INVALID_DATA;
-		// uncaught exceptions crash us. better to just use a bad path.
-		prefix = in;
+		// the path does not name any of the directories we are willing to write to, so
+		// discard it rather than treating the raw string as a filesystem path.
+		DEBUG_LOG(("portableMapPathToRealMapPath - rejecting unknown portable path '%s'\n", in.str()));
+		return AsciiString::TheEmptyString;
 	}
 	prefix.toLower();
 	return prefix;
