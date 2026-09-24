@@ -421,7 +421,8 @@ Bool Transport::isGeneralsPacket( TransportMessage *msg )
 	if (!msg)
 		return false;
 
-	if (msg->length < 0 || msg->length > MAX_MESSAGE_LEN)
+	// NetPacket can only hold MAX_PACKET_SIZE bytes, and queueSend() never sends more than that.
+	if (msg->length < 0 || msg->length > MAX_PACKET_SIZE)
 		return false;
 
 	CRC crc;

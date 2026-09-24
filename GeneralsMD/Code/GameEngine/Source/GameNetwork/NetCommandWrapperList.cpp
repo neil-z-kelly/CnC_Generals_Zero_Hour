@@ -106,8 +106,13 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 		return;
 	}
 
-	m_chunksPresent[msg->getChunkNumber()] = TRUE;
 	UnsignedInt offset = msg->getDataOffset();
+	if ((offset > m_dataLength) || (msg->getDataLength() > (m_dataLength - offset))) {
+		DEBUG_CRASH(("Wrapper chunk doesn't fit in the reassembly buffer"));
+		return;
+	}
+
+	m_chunksPresent[msg->getChunkNumber()] = TRUE;
 	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
 	++m_numChunksPresent;
 }
