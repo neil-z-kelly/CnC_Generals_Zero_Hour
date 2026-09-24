@@ -56,6 +56,11 @@ static const Int MAX_SLOTS = MAX_PLAYER+1;
 // UDP (8 bytes) + IP header (28 bytes) = 36 bytes total.  We want a total packet size of 512, so 512 - 36 = 476
 static const Int MAX_PACKET_SIZE = 476;
 
+// Upper bound on the size of a command reassembled from wrapper chunks.  Whole
+// files (maps, art) are transferred as a single wrapped command, so this is
+// generous, but it bounds the allocation a remote peer can ask for.
+static const UnsignedInt MAX_WRAPPER_TOTAL_DATA_LENGTH = 16 * 1024 * 1024;
+
 /**
  * Command packet - contains frame #, total # of commands, and each command.  This is what gets sent
  * to each player every frame

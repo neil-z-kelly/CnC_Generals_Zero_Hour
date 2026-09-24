@@ -5691,6 +5691,18 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 	i += sizeof(dataOffset);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - data offset = %d\n", dataOffset));
 
+	// the chunk payload lives in the packet buffer, so it can never be longer
+	// than what's left of it no matter what the sender claims.
+	UnsignedInt bytesLeftInPacket = 0;
+	if (i < MAX_PACKET_SIZE) {
+		bytesLeftInPacket = MAX_PACKET_SIZE - i;
+	}
+	if (dataLength > bytesLeftInPacket) {
+		DEBUG_LOG(("NetPacket::readWrapperMessage - data length %d exceeds the %d bytes left in the packet, truncating\n",
+			dataLength, bytesLeftInPacket));
+		dataLength = bytesLeftInPacket;
+	}
+
 	msg->setData(data + i, dataLength);
 	i += dataLength;
 
