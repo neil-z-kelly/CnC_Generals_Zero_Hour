@@ -29,6 +29,7 @@
 
 #include "GameNetwork/NetCommandWrapperList.h"
 #include "GameNetwork/NetPacket.h"
+#include "GameNetwork/NetworkDefs.h"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////// NetCommandWrapperListNode ///////////////////////////////////////////////////////////////////
@@ -42,18 +43,35 @@ NetCommandWrapperListNode::NetCommandWrapperListNode(NetWrapperCommandMsg *msg)
 
 	//
 
-	m_numChunks = msg->getNumChunks();
-	m_chunksPresent = NEW Bool[m_numChunks];	// pool[]ify
+	m_numChunks = 0;
+	m_chunksPresent = NULL;
 	m_numChunksPresent = 0;
+	m_dataLength = 0;
+	m_data = NULL;
+	m_commandID = msg->getWrappedCommandID();
 
-	for (Int i = 0; i < m_numChunks; ++i) {
+	UnsignedInt numChunks = msg->getNumChunks();
+	UnsignedInt dataLength = msg->getTotalDataLength();
+
+	// These values come straight off the wire, so they describe the allocations
+	// below only if they describe a command that could actually have been sent:
+	// every chunk carries at least one byte of the wrapped command.
+	if ((numChunks == 0) || (dataLength == 0) ||
+			(dataLength > MAX_WRAPPER_TOTAL_DATA_LENGTH) || (numChunks > dataLength)) {
+		DEBUG_LOG(("NetCommandWrapperListNode - rejecting wrapper command %d, %d chunks, %d bytes\n",
+			m_commandID, numChunks, dataLength));
+		return;
+	}
+
+	m_numChunks = numChunks;
+	m_chunksPresent = NEW Bool[m_numChunks];	// pool[]ify
+
+	for (UnsignedInt i = 0; i < m_numChunks; ++i) {
 		m_chunksPresent[i] = FALSE;
 	}
 
-	m_dataLength = msg->getTotalDataLength();
+	m_dataLength = dataLength;
 	m_data = NEW UnsignedByte[m_dataLength];	// pool[]ify
-
-	m_commandID = msg->getWrappedCommandID();
 }
 
 NetCommandWrapperListNode::~NetCommandWrapperListNode() {
@@ -68,13 +86,19 @@ NetCommandWrapperListNode::~NetCommandWrapperListNode() {
 	}
 }
 
+Bool NetCommandWrapperListNode::isValid() {
+	return m_data != NULL;
+}
+
 Bool NetCommandWrapperListNode::isComplete() {
-	return m_numChunksPresent == m_numChunks;
+	return isValid() && (m_numChunksPresent == m_numChunks);
 }
 
 Int NetCommandWrapperListNode::getPercentComplete(void) {
 	if (isComplete())
 		return 100;
+	else if (!isValid())
+		return 0;
 	else
 		return min(99, REAL_TO_INT( ((Real)m_numChunksPresent)/((Real)m_numChunks)*100.0f ));
 }
@@ -93,10 +117,30 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 		return;
 	}
 
+	if (!isValid()) {
+		return;
+	}
+
+	// a chunk only belongs to this reassembly if it agrees with it about the shape
+	// of the command being reassembled.
+	if ((msg->getNumChunks() != m_numChunks) || (msg->getTotalDataLength() != m_dataLength)) {
+		return;
+	}
+
 	DEBUG_ASSERTCRASH(msg->getChunkNumber() < m_numChunks, ("MunkeeChunk %d of %d\n",
 		msg->getChunkNumber(), m_numChunks));
 	if (msg->getChunkNumber() >= m_numChunks)
 		return;
+
+	// the offset and length are attacker controlled, so bound them against the
+	// reassembly buffer without ever computing offset + length (which can wrap).
+	UnsignedInt offset = msg->getDataOffset();
+	UnsignedInt dataLength = msg->getDataLength();
+	if ((offset > m_dataLength) || (dataLength > (m_dataLength - offset))) {
+		DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - dropping chunk %d, offset %d length %d doesn't fit in %d bytes\n",
+			msg->getChunkNumber(), offset, dataLength, m_dataLength));
+		return;
+	}
 
 	DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - copying chunk %d\n",
 		msg->getChunkNumber()));
@@ -107,8 +151,9 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 	}
 
 	m_chunksPresent[msg->getChunkNumber()] = TRUE;
-	UnsignedInt offset = msg->getDataOffset();
-	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
+	if (dataLength > 0) {
+		memcpy(m_data + offset, msg->getData(), dataLength);
+	}
 	++m_numChunksPresent;
 }
 
@@ -170,6 +215,11 @@ void NetCommandWrapperList::processWrapper(NetCommandRef *ref) {
 
 	if (temp == NULL) {
 		temp = newInstance(NetCommandWrapperListNode)(msg);
+		if (!temp->isValid()) {
+			// the wrapper described a command we're not willing to reassemble.
+			temp->deleteInstance();
+			return;
+		}
 		temp->m_next = m_list;
 		m_list = temp;
 	}

@@ -39,6 +39,7 @@ public:
 	NetCommandWrapperListNode(NetWrapperCommandMsg *msg);
 	//virtual ~NetCommandWrapperListNode();
 
+	Bool isValid();
 	Bool isComplete();
 	UnsignedShort getCommandID();
 	UnsignedInt getRawDataLength();
