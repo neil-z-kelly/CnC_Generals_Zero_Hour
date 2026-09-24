@@ -189,11 +189,17 @@ NetCommandList * NetCommandWrapperList::getReadyCommands()
 		next = temp->m_next;
 		if (temp->isComplete()) {
 			NetCommandRef *msg = NetPacket::ConstructNetCommandMsgFromRawData(temp->getRawData(), temp->getRawDataLength());
-			NetCommandRef *ret = retlist->addMessage(msg->getCommand());
-			ret->setRelay(msg->getRelay());
+			if (msg != NULL) {
+				NetCommandRef *ret = retlist->addMessage(msg->getCommand());
+				if (ret != NULL) {
+					ret->setRelay(msg->getRelay());
+				}
 
-			msg->deleteInstance();
-			msg = NULL;
+				msg->deleteInstance();
+				msg = NULL;
+			} else {
+				DEBUG_CRASH(("Could not construct a command from the reassembled wrapper data."));
+			}
 
 			removeFromList(temp);
 			temp = NULL;
