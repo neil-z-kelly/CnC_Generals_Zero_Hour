@@ -38,6 +38,14 @@
 //#pragma MESSAGE("************************************** WARNING, optimization disabled for debugging purposes")
 #endif
 
+// Returns TRUE if fieldSize bytes can be read out of the raw data buffer starting at offset.
+static Bool CanReadRawField(Int offset, UnsignedInt fieldSize, UnsignedShort dataLength) {
+	if ((offset < 0) || (offset > (Int)dataLength)) {
+		return FALSE;
+	}
+	return (UnsignedInt)((Int)dataLength - offset) >= fieldSize;
+}
+
 // This function assumes that all of the fields are either of default value or are
 // present in the raw data.
 NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data, UnsignedShort dataLength) {
@@ -54,22 +62,42 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 
 	while ((offset < (Int)dataLength) && notDone) {
 		if (data[offset] == 'T') {
+			if (!CanReadRawField(offset + 1, sizeof(UnsignedByte), dataLength)) {
+				DEBUG_CRASH(("Truncated command type field in wrapped command data."));
+				break;
+			}
 			++offset;
 			memcpy(&commandType, data + offset, sizeof(UnsignedByte));
 			offset += sizeof(UnsignedByte);
 		} else if (data[offset] == 'R') {
+			if (!CanReadRawField(offset + 1, sizeof(UnsignedByte), dataLength)) {
+				DEBUG_CRASH(("Truncated relay field in wrapped command data."));
+				break;
+			}
 			++offset;
 			memcpy(&relay, data + offset, sizeof(UnsignedByte));
 			offset += sizeof(UnsignedByte);
 		} else if (data[offset] == 'P') {
+			if (!CanReadRawField(offset + 1, sizeof(UnsignedByte), dataLength)) {
+				DEBUG_CRASH(("Truncated player ID field in wrapped command data."));
+				break;
+			}
 			++offset;
 			memcpy(&playerID, data + offset, sizeof(UnsignedByte));
 			offset += sizeof(UnsignedByte);
 		} else if (data[offset] == 'C') {
+			if (!CanReadRawField(offset + 1, sizeof(UnsignedShort), dataLength)) {
+				DEBUG_CRASH(("Truncated command ID field in wrapped command data."));
+				break;
+			}
 			++offset;
 			memcpy(&commandID, data + offset, sizeof(UnsignedShort));
 			offset += sizeof(UnsignedShort);
 		} else if (data[offset] == 'F') {
+			if (!CanReadRawField(offset + 1, sizeof(UnsignedInt), dataLength)) {
+				DEBUG_CRASH(("Truncated frame field in wrapped command data."));
+				break;
+			}
 			++offset;
 			memcpy(&frame, data + offset, sizeof(UnsignedInt));
 			offset += sizeof(UnsignedInt);
@@ -131,6 +159,11 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 				msg = readFrameResendRequestMessage(data, offset);
 			}
 
+			if (msg == NULL) {
+				DEBUG_CRASH(("Unhandled command type in wrapped command data, ignoring."));
+				break;
+			}
+
 			msg->setExecutionFrame(frame);
 			msg->setID(commandID);
 			msg->setPlayerID(playerID);
@@ -144,6 +177,10 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			msg = NULL;
 
 			notDone = FALSE;
+		} else {
+			// we don't recognize this entry, but we have to advance offset so we don't fall into an infinite loop.
+			DEBUG_CRASH(("Unrecognized entry in wrapped command data, ignoring."));
+			++offset;
 		}
 	}
 
