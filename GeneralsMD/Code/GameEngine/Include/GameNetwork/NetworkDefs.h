@@ -30,6 +30,7 @@
 
 #include "Lib/BaseType.h"
 #include "Common/MessageStream.h"
+#include "GameNetwork/NetMAC.h"
 
 static const Int WOL_NAME_LEN = 64;
 
@@ -77,7 +78,7 @@ struct CommandPacket
 #pragma pack(push, 1)
 struct TransportMessageHeader
 {
-	UnsignedInt crc;											///< packet-level CRC (must be first in packet)
+	UnsignedByte mac[NET_MAC_LEN];				///< truncated HMAC-SHA1 over the rest of the packet, keyed with the session secret (must be first in packet)
 	UnsignedShort magic;									///< Magic number identifying Generals packets
 //	Int id;
 //	NetMessageFlags flags;

@@ -300,6 +300,30 @@ void GameInfo::init( void )
 	reset();
 }
 
+void GameInfo::generateSessionKey( void )
+{
+	netGenerateSessionKey(m_sessionKey, NET_SESSION_KEY_LEN);
+	m_hasSessionKey = TRUE;
+}
+
+void GameInfo::setSessionKey( const UnsignedByte *key )
+{
+	if (!key)
+	{
+		clearSessionKey();
+		return;
+	}
+
+	memcpy(m_sessionKey, key, NET_SESSION_KEY_LEN);
+	m_hasSessionKey = TRUE;
+}
+
+void GameInfo::clearSessionKey( void )
+{
+	memset(m_sessionKey, 0, sizeof(m_sessionKey));
+	m_hasSessionKey = FALSE;
+}
+
 void GameInfo::reset( void )
 {
 	m_crcInterval = NET_CRC_INTERVAL;
@@ -312,6 +336,9 @@ void GameInfo::reset( void )
 	m_useStats = TRUE;
 	m_surrendered = FALSE;
   m_oldFactionsOnly = FALSE;
+	// Everybody starts with a fresh secret; the host's copy is the one that ends
+	// up shared with the other players via the game options.
+	generateSessionKey();
 	// Added By Sadullah Nader
 	// Initializations missing and needed
 //	m_localIP = 0; // BGC - actually we don't want this to be reset since the m_localIP is 
@@ -930,6 +957,23 @@ AsciiString GameInfoToAsciiString( const GameInfo *game )
 		game->getMapCRC(), game->getMapSize(), game->getSeed(), game->getCRCInterval(), game->getSuperweaponRestriction(),
 		game->getStartingCash().countMoney(), game->oldFactionsOnly() ? 'Y' : 'N' );
 
+	// The session secret used to authenticate this game's packets.  It rides
+	// along with the rest of the options so that everybody the host admits into
+	// the game ends up holding it.
+	if (game->hasSessionKey())
+	{
+		const UnsignedByte *sessionKey = game->getSessionKey();
+		AsciiString keyString = "SK=";
+		for (Int keyByte = 0; keyByte < NET_SESSION_KEY_LEN; ++keyByte)
+		{
+			AsciiString hexByte;
+			hexByte.format("%2.2x", sessionKey[keyByte]);
+			keyString.concat(hexByte);
+		}
+		keyString.concat(';');
+		optionsString.concat(keyString);
+	}
+
 	//add player info for each slot
 	optionsString.concat(slotListID);
 	optionsString.concat('=');
@@ -1017,6 +1061,10 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 	Int seed = 0;
 	Int crc = 100;
 	Bool sawCRC = FALSE;
+	UnsignedByte sessionKey[NET_SESSION_KEY_LEN];
+	Bool sawSessionKey = FALSE;
+
+	memset(sessionKey, 0, sizeof(sessionKey));
   Bool oldFactionsOnly = FALSE;
 	Int useStats = TRUE;
   Money startingCash = TheGlobalData->m_defaultStartingCash;
@@ -1105,6 +1153,20 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		{
 			crc = atoi(val.str());
 			sawCRC = TRUE;
+		}
+		else if (key.compare("SK") == 0)
+		{
+			if (val.getLength() != NET_SESSION_KEY_LEN * 2)
+			{
+				optionsOk = false;
+				DEBUG_LOG(("ParseAsciiStringToGameInfo - session key is mis-sized, quitting\n"));
+				break;
+			}
+			for (Int keyByte = 0; keyByte < NET_SESSION_KEY_LEN; ++keyByte)
+			{
+				sessionKey[keyByte] = (UnsignedByte)grabHexInt(val.str() + (keyByte * 2));
+			}
+			sawSessionKey = TRUE;
 		}
     else if (key.compare("SR") == 0 )
     {
@@ -1481,6 +1543,12 @@ Bool ParseAsciiStringToGameInfo(GameInfo *game, AsciiString options)
 		game->setMapContentsMask(mapContentsMask);
 		game->setSeed(seed);
 		game->setCRCInterval(crc);
+
+		if (sawSessionKey)
+		{
+			game->setSessionKey(sessionKey);
+		}
+
 		game->setUseStats(useStats);
     game->setSuperweaponRestriction(restriction);
     game->setStartingCash( startingCash );

@@ -194,6 +194,15 @@ public:
 	void setSeed( Int seed );													///< Set the random seed for the game
 	inline Int getSeed( void ) const;												///< Get the game seed
 
+	// Per-session secret shared by everybody in the game.  The host generates it
+	// and it reaches the other players with the rest of the game options; the
+	// transport layer uses it to authenticate datagrams.
+	void generateSessionKey( void );											///< Make a fresh session secret (host side)
+	void setSessionKey( const UnsignedByte *key );					///< Adopt the session secret sent by the host
+	void clearSessionKey( void );
+	inline const UnsignedByte *getSessionKey( void ) const { return m_sessionKey; }
+	inline Bool hasSessionKey( void ) const { return m_hasSessionKey; }
+
 	void setSlotPointer( Int index, GameSlot *slot );	///< Set the slot info pointer
 
 	void setLocalIP( UnsignedInt ip ) { m_localIP =ip; }	///< Set the local IP
@@ -239,6 +248,9 @@ protected:
 	UnsignedInt m_mapSize;
 	Int m_mapMask;
 	Int m_seed;
+
+	UnsignedByte m_sessionKey[NET_SESSION_KEY_LEN];
+	Bool m_hasSessionKey;
 };
 
 extern GameInfo *TheGameInfo;
