@@ -116,6 +116,7 @@ ConnectionManager::~ConnectionManager(void)
 	}
 
 	s_fileCommandMap.clear();
+	s_fileSenderMap.clear();
 	s_fileRecipientMaskMap.clear();
 	for (i = 0; i < MAX_SLOTS; ++i) {
 		s_fileProgressMap[i].clear();
@@ -209,6 +210,7 @@ void ConnectionManager::init()
 	m_netCommandWrapperList->init();
 
 	s_fileCommandMap.clear();
+	s_fileSenderMap.clear();
 	s_fileRecipientMaskMap.clear();
 	for (i = 0; i < MAX_SLOTS; ++i) {
 		s_fileProgressMap[i].clear();
@@ -685,7 +687,27 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls\n", log.str()));
 #endif
 
-	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
+	// The portable filename comes straight off the wire, so only write it if it resolved to a
+	// path inside one of our map/save directories and matches a file this same player announced.
+	AsciiString realFilename = msg->getRealFilename();
+	if (realFilename.isEmpty())
+	{
+		DEBUG_LOG(("ConnectionManager::processFile() - refusing file '%s' from player %d: unsafe path\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
+	FileCommandMap::iterator announcedIt = s_fileCommandMap.find(msg->getID());
+	FileSenderMap::iterator senderIt = s_fileSenderMap.find(msg->getID());
+	if ((announcedIt == s_fileCommandMap.end()) || (senderIt == s_fileSenderMap.end()) ||
+			(announcedIt->second.compareNoCase(realFilename) != 0) || (senderIt->second != msg->getPlayerID()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFile() - refusing unannounced file '%s' (command %d) from player %d\n",
+			realFilename.str(), msg->getID(), msg->getPlayerID()));
+		return;
+	}
+
+	if (TheFileSystem->doesFileExist(realFilename.str()))
 	{
 		DEBUG_LOG(("File exists already!\n"));
 		//return;
@@ -717,13 +739,13 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	}
 #endif // COMPRESS_TARGAS
 
-	File *fp = TheFileSystem->openFile(msg->getRealFilename().str(), File::CREATE | File::BINARY | File::WRITE);
+	File *fp = TheFileSystem->openFile(realFilename.str(), File::CREATE | File::BINARY | File::WRITE);
 	if (fp)
 	{
 		fp->write(buf, len);
 		fp->close();
 		fp = NULL;
-		DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,msg->getRealFilename().str()));
+		DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,realFilename.str()));
 
 	}
 	else
@@ -764,7 +786,15 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 void ConnectionManager::processFileAnnounce(NetFileAnnounceCommandMsg *msg) 
 {
 	DEBUG_LOG(("ConnectionManager::processFileAnnounce() - expecting '%s' (%s) in command %d\n", msg->getPortableFilename().str(), msg->getRealFilename().str(), msg->getFileID()));
-	s_fileCommandMap[msg->getFileID()] = msg->getRealFilename();
+	AsciiString realFilename = msg->getRealFilename();
+	if (realFilename.isEmpty())
+	{
+		DEBUG_LOG(("ConnectionManager::processFileAnnounce() - refusing announce of '%s' from player %d: unsafe path\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+	s_fileCommandMap[msg->getFileID()] = realFilename;
+	s_fileSenderMap[msg->getFileID()] = msg->getPlayerID();
 	s_fileRecipientMaskMap[msg->getFileID()] = msg->getPlayerMask();
 	for (Int i=0; i<MAX_SLOTS; ++i)
 	{

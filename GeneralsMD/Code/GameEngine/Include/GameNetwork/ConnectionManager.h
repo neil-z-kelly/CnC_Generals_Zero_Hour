@@ -46,6 +46,7 @@ class NetCommandWrapperList;
 typedef std::map<UnsignedShort, AsciiString> FileCommandMap;
 typedef std::map<UnsignedShort, UnsignedByte> FileMaskMap;
 typedef std::map<UnsignedShort, Int> FileProgressMap;
+typedef std::map<UnsignedShort, Int> FileSenderMap;
 
 class ConnectionManager
 {
@@ -213,6 +214,7 @@ private:
 
 	// -----------------------------------------------------------------------------
 	FileCommandMap s_fileCommandMap;
+	FileSenderMap s_fileSenderMap;
 	FileMaskMap s_fileRecipientMaskMap;
 	FileProgressMap s_fileProgressMap[MAX_SLOTS];
 	// -----------------------------------------------------------------------------
