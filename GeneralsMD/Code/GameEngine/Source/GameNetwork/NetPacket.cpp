@@ -118,9 +118,9 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
 				msg = readWrapperMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
+				msg = readFileMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
-				msg = readFileAnnounceMessage(data, offset);
+				msg = readFileAnnounceMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
 				msg = readFileProgressMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_DISCONNECTFRAME) {
@@ -129,6 +129,10 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 				msg = readDisconnectScreenOffMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FRAMERESENDREQUEST) {
 				msg = readFrameResendRequestMessage(data, offset);
+			}
+
+			if (msg == NULL) {
+				return NULL;
 			}
 
 			msg->setExecutionFrame(frame);
@@ -5061,11 +5065,11 @@ NetCommandList * NetPacket::getCommandList() {
 				break;
 			case NETCOMMANDTYPE_FILE:
 				DEBUG_LOG(("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
+				msg = readFileMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEANNOUNCE:
 				DEBUG_LOG(("read file announce message from player %d\n", playerID));
-				msg = readFileAnnounceMessage(m_packet, i);
+				msg = readFileAnnounceMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEPROGRESS:
 				DEBUG_LOG(("read file progress message from player %d\n", playerID));
@@ -5697,23 +5701,54 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
-	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
-	char filename[_MAX_PATH];
-	char *c = filename;
+// Copies a NUL-terminated string out of the packet into buf, refusing to read past the
+// end of the packet or to write more than bufSize bytes (including the terminator).
+Bool NetPacket::readFilenameFromPacket(UnsignedByte *data, Int &i, Int packetLen, char *buf, Int bufSize) {
+	Int len = 0;
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+	while ((i < packetLen) && (data[i] != 0)) {
+		if (len >= (bufSize - 1)) {
+			return FALSE;
+		}
+		buf[len] = (char)data[i];
+		++len;
 		++i;
 	}
-	*c = 0;
+
+	if (i >= packetLen) {
+		// ran off the end of the packet before finding the terminator.
+		return FALSE;
+	}
+
+	buf[len] = 0;
 	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+
+	return TRUE;
+}
+
+NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i, Int packetLen) {
+	char filename[_MAX_PATH];
+
+	if (!readFilenameFromPacket(data, i, packetLen, filename, sizeof(filename))) {
+		DEBUG_LOG(("NetPacket::readFileMessage - malformed filename in packet\n"));
+		return NULL;
+	}
 
 	UnsignedInt dataLength = 0;
+	if ((packetLen - i) < (Int)sizeof(dataLength)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - packet too short for file length\n"));
+		return NULL;
+	}
 	memcpy(&dataLength, data + i, sizeof(dataLength));
 	i += sizeof(dataLength);
+
+	if (dataLength > (UnsignedInt)(packetLen - i)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - file length %d exceeds remaining packet data\n", dataLength));
+		return NULL;
+	}
+
+	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedByte *buf = NEW UnsignedByte[dataLength];
 	memcpy(buf, data + i, dataLength);
@@ -5724,26 +5759,28 @@ NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i) {
-	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i, Int packetLen) {
 	char filename[_MAX_PATH];
-	char *c = filename;
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
-		++i;
+	if (!readFilenameFromPacket(data, i, packetLen, filename, sizeof(filename))) {
+		DEBUG_LOG(("NetPacket::readFileAnnounceMessage - malformed filename in packet\n"));
+		return NULL;
 	}
-	*c = 0;
-	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedShort fileID = 0;
+	UnsignedByte playerMask = 0;
+	if ((packetLen - i) < (Int)(sizeof(fileID) + sizeof(playerMask))) {
+		DEBUG_LOG(("NetPacket::readFileAnnounceMessage - packet too short for file announcement\n"));
+		return NULL;
+	}
+
+	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+
 	memcpy(&fileID, data + i, sizeof(fileID));
 	i += sizeof(fileID);
 	msg->setFileID(fileID);
 
-	UnsignedByte playerMask = 0;
 	memcpy(&playerMask, data + i, sizeof(playerMask));
 	i += sizeof(playerMask);
 	msg->setPlayerMask(playerMask);

@@ -189,11 +189,13 @@ NetCommandList * NetCommandWrapperList::getReadyCommands()
 		next = temp->m_next;
 		if (temp->isComplete()) {
 			NetCommandRef *msg = NetPacket::ConstructNetCommandMsgFromRawData(temp->getRawData(), temp->getRawDataLength());
-			NetCommandRef *ret = retlist->addMessage(msg->getCommand());
-			ret->setRelay(msg->getRelay());
+			if (msg != NULL) {
+				NetCommandRef *ret = retlist->addMessage(msg->getCommand());
+				ret->setRelay(msg->getRelay());
 
-			msg->deleteInstance();
-			msg = NULL;
+				msg->deleteInstance();
+				msg = NULL;
+			}
 
 			removeFromList(temp);
 			temp = NULL;
