@@ -299,7 +299,13 @@ Int ConnectionManager::getPingsRecieved()
 
 Bool ConnectionManager::isPlayerConnected( Int playerID )
 {
-	return ( playerID == m_localSlot || (m_connections[playerID] && !m_connections[playerID]->isQuitting()) );
+	if (playerID == m_localSlot) {
+		return TRUE;
+	}
+	if ((playerID < 0) || (playerID >= MAX_SLOTS)) {
+		return FALSE;
+	}
+	return ( m_connections[playerID] && !m_connections[playerID]->isQuitting() );
 }
 
 void ConnectionManager::attachTransport(Transport *transport) {
@@ -429,6 +435,12 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 		return FALSE;
 	}
 
+	// The player ID is whatever the sender put in the packet, so it has to be validated
+	// before it is used as an index into any of the per-slot arrays.
+	if (msg->getPlayerID() >= (UnsignedInt)MAX_SLOTS) {
+		return TRUE;
+	}
+
 	if ((m_connections[msg->getPlayerID()] == NULL) && (msg->getPlayerID() != m_localSlot)) {
 		// if this is from a player that is no longer in the game, then ignore them.
 		return TRUE;
@@ -439,7 +451,7 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 		return FALSE;
 	}
 
-	if ((msg->getPlayerID() >= 0) && (msg->getPlayerID() < MAX_SLOTS) && (msg->getPlayerID() != m_localSlot)) {
+	if (msg->getPlayerID() != m_localSlot) {
 		if (m_connections[msg->getPlayerID()] == NULL) {
 			return TRUE;
 		}
@@ -640,9 +652,12 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 {
 	UnicodeString unitext;
 	UnicodeString name;
-	UnsignedByte playerID = msg->getPlayerID();
+	UnsignedInt playerID = msg->getPlayerID();
+	if (playerID >= (UnsignedInt)MAX_SLOTS) {
+		return;
+	}
 	//DEBUG_LOG(("processChat(): playerID = %d\n", playerID));
-	if (playerID == m_localSlot) {
+	if ((Int)playerID == m_localSlot) {
 		name = m_localUser->GetName();
 		//DEBUG_LOG(("connection is NULL, using %ls\n", name.str()));
 	} else if (((m_connections[playerID] != NULL) && (m_connections[playerID]->isQuitting() == FALSE))) {
@@ -663,7 +678,8 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 	
 	Bool fromObserver = !player->isPlayerActive();
 	Bool amIObserver = !ThePlayerList->getLocalPlayer()->isPlayerActive();
-	Bool canSeeChat = amIObserver || !fromObserver && !TheGameInfo->getConstSlot(playerID)->isMuted();
+	const GameSlot *chatSlot = (TheGameInfo != NULL) ? TheGameInfo->getConstSlot((Int)playerID) : NULL;
+	Bool canSeeChat = amIObserver || !fromObserver && ((chatSlot == NULL) || !chatSlot->isMuted());
 	
 	if ( ((1<<m_localSlot) & msg->getPlayerMask() ) && canSeeChat  )
 	{
@@ -783,9 +799,13 @@ void ConnectionManager::processFileProgress(NetFileProgressCommandMsg *msg)
 {
 	DEBUG_LOG(("ConnectionManager::processFileProgress() - command %d is at %d%%\n",
 		msg->getFileID(), msg->getProgress()));
-	Int oldProgress = s_fileProgressMap[msg->getPlayerID()][msg->getFileID()];
+	UnsignedInt playerID = msg->getPlayerID();
+	if (playerID >= (UnsignedInt)MAX_SLOTS) {
+		return;
+	}
+	Int oldProgress = s_fileProgressMap[playerID][msg->getFileID()];
 
-	s_fileProgressMap[msg->getPlayerID()][msg->getFileID()] = max(oldProgress, msg->getProgress());
+	s_fileProgressMap[playerID][msg->getFileID()] = max(oldProgress, msg->getProgress());
 }
 
 void ConnectionManager::processProgress( NetProgressCommandMsg *msg )
