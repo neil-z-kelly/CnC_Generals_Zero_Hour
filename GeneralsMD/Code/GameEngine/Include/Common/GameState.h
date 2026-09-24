@@ -192,6 +192,7 @@ public:
 
 	AsciiString realMapPathToPortableMapPath(const AsciiString& in) const;
 	AsciiString portableMapPathToRealMapPath(const AsciiString& in) const;
+	Bool isSafePortableMapPath(const AsciiString& in) const;
 
 	AsciiString getMapLeafName(const AsciiString& in) const;
 

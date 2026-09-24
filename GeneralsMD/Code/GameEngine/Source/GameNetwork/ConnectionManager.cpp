@@ -32,6 +32,7 @@
 #include "Common/Debug.h"
 #include "Common/File.h"
 #include "Common/GameAudio.h"
+#include "Common/GameState.h"
 #include "Common/LocalFileSystem.h"
 #include "Common/Player.h"
 #include "Common/PlayerList.h"
@@ -685,6 +686,14 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls\n", log.str()));
 #endif
 
+	// the filename comes straight off the wire, so never write it unless it resolves inside
+	// one of the map or save directories
+	if ((TheGameState == NULL) || !TheGameState->isSafePortableMapPath(msg->getPortableFilename()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFile() - refusing file '%s' from player %d\n", msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
 	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
 	{
 		DEBUG_LOG(("File exists already!\n"));
@@ -763,6 +772,12 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 
 void ConnectionManager::processFileAnnounce(NetFileAnnounceCommandMsg *msg) 
 {
+	if ((TheGameState == NULL) || !TheGameState->isSafePortableMapPath(msg->getPortableFilename()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFileAnnounce() - refusing file '%s' from player %d\n", msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
 	DEBUG_LOG(("ConnectionManager::processFileAnnounce() - expecting '%s' (%s) in command %d\n", msg->getPortableFilename().str(), msg->getRealFilename().str(), msg->getFileID()));
 	s_fileCommandMap[msg->getFileID()] = msg->getRealFilename();
 	s_fileRecipientMaskMap[msg->getFileID()] = msg->getPlayerMask();

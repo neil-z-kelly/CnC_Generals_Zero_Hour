@@ -934,6 +934,56 @@ AsciiString GameState::portableMapPathToRealMapPath(const AsciiString& in) const
 }
 
 // ------------------------------------------------------------------------------------------------
+/**
+	A portable map path that comes from an untrusted source (eg, a network file transfer) must be
+	a simple relative path below one of the portable prefixes before it may be turned into a real
+	path and used for file i/o. Absolute paths, drive letters, alternate separators and "." or ".."
+	components are all rejected, and the resolved path must still live in one of the map or save
+	directories.
+*/
+Bool GameState::isSafePortableMapPath(const AsciiString& in) const
+{
+	if (in.isEmpty() || in.getLength() >= _MAX_PATH || TheMapCache == NULL)
+		return FALSE;
+
+	if (!in.startsWithNoCase(PORTABLE_SAVE) &&
+			!in.startsWithNoCase(PORTABLE_MAPS) &&
+			!in.startsWithNoCase(PORTABLE_USER_MAPS))
+		return FALSE;
+
+	Bool atComponentStart = TRUE;
+	for (const char* c = in.str(); *c != 0; ++c)
+	{
+		if (*c == ':' || *c == '/' || (UnsignedByte)(*c) < ' ')
+			return FALSE;
+
+		if (atComponentStart)
+		{
+			if (*c == '\\')
+				return FALSE;		// empty component: leading or doubled separator, or a UNC path
+			if (c[0] == '.' && (c[1] == 0 || c[1] == '\\' ||
+					(c[1] == '.' && (c[2] == 0 || c[2] == '\\'))))
+				return FALSE;		// "." or ".." component
+		}
+
+		atComponentStart = (*c == '\\');
+	}
+
+	if (atComponentStart)
+		return FALSE;			// names a directory, not a file
+
+	AsciiString real = portableMapPathToRealMapPath(in);
+	AsciiString mapDir = TheMapCache->getMapDir();
+	mapDir.concat("\\");
+	AsciiString userMapDir = TheMapCache->getUserMapDir();
+	userMapDir.concat("\\");
+
+	return real.startsWithNoCase(getSaveDirectory()) ||
+				 real.startsWithNoCase(mapDir) ||
+				 real.startsWithNoCase(userMapDir);
+}
+
+// ------------------------------------------------------------------------------------------------
 /** Does the save game file exist */
 // ------------------------------------------------------------------------------------------------
 Bool GameState::doesSaveGameExist( AsciiString filename ) 
