@@ -25,9 +25,19 @@
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file int the GameEngine
 
-#include "Common/CRC.h"
+#include "GameNetwork/NetMAC.h"
 #include "GameNetwork/Transport.h"
 #include "GameNetwork/NetworkInterface.h"
+
+//--------------------------------------------------------------------------
+// Packets are authenticated with a keyed MAC over the packet contents.  Until
+// a session secret is known (lobby discovery, NAT negotiation) this well known
+// key is used, which provides an integrity check only - it authenticates
+// nothing, exactly like the CRC it replaces.
+static const UnsignedByte theDefaultAuthKey[NET_SESSION_KEY_LEN] =
+{
+	'G', 'e', 'n', 'e', 'r', 'a', 'l', 's', '-', 'n', 'o', 'k'
+};
 
 #ifdef _INTERNAL
 // for occasional debugging...
@@ -76,6 +86,7 @@ Transport::Transport(void)
 {
 	m_winsockInit = false;
 	m_udpsock = NULL;
+	clearAuthKey();
 }
 
 Transport::~Transport(void)
@@ -164,8 +175,47 @@ Bool Transport::init( UnsignedInt ip, UnsignedShort port )
 	return true;
 }
 
+/**
+ * Set the per-session shared secret used to authenticate datagrams.  Both ends
+ * of a connection must hold the same secret or every packet they exchange is
+ * dropped as unauthenticated.
+ */
+void Transport::setAuthKey( const UnsignedByte *key, Int keyLen )
+{
+	if (!key || keyLen <= 0)
+	{
+		clearAuthKey();
+		return;
+	}
+
+	memset(m_authKey, 0, sizeof(m_authKey));
+	memcpy(m_authKey, key, (keyLen < NET_SESSION_KEY_LEN) ? keyLen : NET_SESSION_KEY_LEN);
+	m_hasAuthKey = TRUE;
+}
+
+void Transport::clearAuthKey( void )
+{
+	memcpy(m_authKey, theDefaultAuthKey, sizeof(m_authKey));
+	m_hasAuthKey = FALSE;
+}
+
+/**
+ * Compute the packet MAC over everything after the MAC field itself, keyed
+ * with the session secret.
+ */
+void Transport::computeMessageMAC( const TransportMessage *msg, UnsignedByte *macOut )
+{
+	UnsignedByte digest[NET_SHA1_DIGEST_LEN];
+	Int macedLen = msg->length + sizeof(TransportMessageHeader) - NET_MAC_LEN;
+
+	netHMACSHA1(m_authKey, NET_SESSION_KEY_LEN, (const unsigned char *)(&(msg->header.magic)), macedLen, digest);
+	memcpy(macOut, digest, NET_MAC_LEN);
+}
+
 void Transport::reset( void )
 {
+	clearAuthKey();
+
 	if (m_udpsock)
 	{
 		delete m_udpsock;
@@ -400,10 +450,7 @@ Bool Transport::queueSend(UnsignedInt addr, UnsignedShort port, const UnsignedBy
 //			m_outBuffer[i].header.id = id;
 			m_outBuffer[i].header.magic = GENERALS_MAGIC_NUMBER;
 
-			CRC crc;
-			crc.computeCRC( (unsigned char *)(&(m_outBuffer[i].header.magic)), m_outBuffer[i].length + sizeof(TransportMessageHeader) - sizeof(UnsignedInt) );
-//			DEBUG_LOG(("About to assign the CRC for the packet\n"));
-			m_outBuffer[i].header.crc = crc.get();
+			computeMessageMAC( &m_outBuffer[i], m_outBuffer[i].header.mac );
 
 			// Encrypt packet
 //			DEBUG_LOG(("buffer: "));
@@ -424,14 +471,15 @@ Bool Transport::isGeneralsPacket( TransportMessage *msg )
 	if (msg->length < 0 || msg->length > MAX_MESSAGE_LEN)
 		return false;
 
-	CRC crc;
-//	crc.computeCRC( (unsigned char *)msg->data, msg->length );
-	crc.computeCRC( (unsigned char *)(&(msg->header.magic)), msg->length + sizeof(TransportMessageHeader) - sizeof(UnsignedInt) );
-
-	if (crc.get() != msg->header.crc)
+	if (msg->header.magic != GENERALS_MAGIC_NUMBER)
 		return false;
 
-	if (msg->header.magic != GENERALS_MAGIC_NUMBER)
+	// The magic number and the XOR obfuscation are public knowledge, so they say
+	// nothing about who sent this datagram.  Only the keyed MAC does.
+	UnsignedByte expectedMAC[NET_MAC_LEN];
+	computeMessageMAC( msg, expectedMAC );
+
+	if (!netSecureCompare(expectedMAC, msg->header.mac, NET_MAC_LEN))
 		return false;
 
 	return true;

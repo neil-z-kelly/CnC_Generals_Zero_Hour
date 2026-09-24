@@ -367,6 +367,16 @@ void ConnectionManager::doRelay() {
 			while (cmd != NULL) {
 				//DEBUG_LOG(("ConnectionManager::doRelay() - Looking at a command of type %s\n",
 					//GetAsciiNetCommandType(cmd->getCommand()->getNetCommandType()).str()));
+
+				// Take the sender's identity from the connection the datagram came in
+				// on, not from the player ID the packet claims.
+				if (!isAuthorizedSender(cmd->getCommand()->getPlayerID(), packet->getAddr(), packet->getPort())) {
+					DEBUG_LOG(("ConnectionManager::doRelay() - dropping command claiming to be from player %d, it came from %X:%d\n",
+						cmd->getCommand()->getPlayerID(), packet->getAddr(), packet->getPort()));
+					cmd = cmd->getNext();
+					continue;
+				}
+
 				if (CommandRequiresAck(cmd->getCommand())) {
 					ackCommand(cmd, m_localSlot);
 				}
@@ -415,11 +425,57 @@ void ConnectionManager::doRelay() {
 }
 
 /**
+ * Is this datagram allowed to carry a command attributed to the given player?
+ * A command is only honored if it arrives either straight from that player's
+ * connection endpoint or from the packet router that is relaying for him.  The
+ * player ID inside the packet is attacker controlled, so on its own it says
+ * nothing about who sent the datagram.
+ */
+Bool ConnectionManager::isAuthorizedSender(Int playerID, UnsignedInt addr, UnsignedShort port) {
+	if ((playerID < 0) || (playerID >= MAX_SLOTS)) {
+		return FALSE;
+	}
+
+	if (doesEndpointMatchSlot(playerID, addr, port)) {
+		return TRUE;
+	}
+
+	// Commands from other players legitimately reach us through the packet
+	// router, so its endpoint may vouch for any player.
+	if ((m_packetRouterSlot < MAX_SLOTS) && (m_packetRouterSlot != (UnsignedInt)playerID) &&
+			doesEndpointMatchSlot(m_packetRouterSlot, addr, port)) {
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+/**
+ * Does the given source address/port belong to the connection for this slot?
+ */
+Bool ConnectionManager::doesEndpointMatchSlot(Int slot, UnsignedInt addr, UnsignedShort port) {
+	if ((slot < 0) || (slot >= MAX_SLOTS) || (m_connections[slot] == NULL)) {
+		return FALSE;
+	}
+
+	User *user = m_connections[slot]->getUser();
+	if (user == NULL) {
+		return FALSE;
+	}
+
+	return ((user->GetIPAddr() == addr) && (user->GetPort() == port));
+}
+
+/**
  * This is where the non-synchronized network commands should be processed.
  * Return TRUE if the command should not be relayed. Return FALSE if it should be relayed.
  */
 Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 	NetCommandMsg *msg = ref->getCommand();
+
+	if ((msg->getPlayerID() < 0) || (msg->getPlayerID() >= MAX_SLOTS)) {
+		return TRUE;
+	}
 
 	if ((msg->getNetCommandType() == NETCOMMANDTYPE_ACKSTAGE1) ||
 			(msg->getNetCommandType() == NETCOMMANDTYPE_ACKSTAGE2) ||
@@ -1875,6 +1931,22 @@ void ConnectionManager::parseUserList(const GameInfo *game)
 	Int numUsers = 0;
 	m_localSlot = -1;
 	DEBUG_LOG(("Local slot is %d\n", game->getLocalSlotNum()));
+
+	// Key the transport with the secret the host handed out with the game
+	// options, so that only the players who were admitted into this game can
+	// produce datagrams we will accept.
+	if (m_transport != NULL)
+	{
+		if (game->hasSessionKey())
+		{
+			m_transport->setAuthKey(game->getSessionKey(), NET_SESSION_KEY_LEN);
+		}
+		else
+		{
+			DEBUG_LOG(("ConnectionManager::parseUserList - no session key in the game info, packets will not be authenticated\n"));
+			m_transport->clearAuthKey();
+		}
+	}
 	for (i=0; i<MAX_SLOTS; ++i)
 	{
 		const GameSlot *slot = game->getConstSlot(i);	// badness, but since we cast right back to const, we should be ok

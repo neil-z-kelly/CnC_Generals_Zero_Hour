@@ -155,6 +155,9 @@ private:
 	void sendRemoteCommand(NetCommandRef *msg);
 	void ackCommand(NetCommandRef *ref, UnsignedInt localSlot);
 
+	Bool isAuthorizedSender(Int playerID, UnsignedInt addr, UnsignedShort port);	///< Can a datagram from this source carry commands for this player?
+	Bool doesEndpointMatchSlot(Int slot, UnsignedInt addr, UnsignedShort port);	///< Is this the endpoint we connected to for this slot?
+
 	Bool processNetCommand(NetCommandRef *ref);
 	void processAckStage1(NetCommandMsg *msg);
 	void processAckStage2(NetCommandMsg *msg);

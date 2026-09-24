@@ -61,6 +61,14 @@ public:
 
 	inline Bool allowBroadcasts(Bool val) { if (!m_udpsock) return false; return (m_udpsock->AllowBroadcasts(val))?true:false; }
 
+	// Packet authentication.  Datagrams are authenticated with a keyed MAC over
+	// the packet contents; without a session key the transport falls back to a
+	// well known key, which authenticates nothing and is only usable for the
+	// unauthenticated lobby/discovery traffic that predates the session key.
+	void setAuthKey( const UnsignedByte *key, Int keyLen );	///< Set the per-session secret used to authenticate packets.
+	void clearAuthKey( void );														///< Forget the per-session secret.
+	Bool hasAuthKey( void ) const { return m_hasAuthKey; }
+
 	// Latency insertion and packet loss
 	void setLatency( Bool val ) { m_useLatency = val; }
 	void setPacketLoss( Bool val ) { m_usePacketLoss = val; }
@@ -100,6 +108,10 @@ private:
 	UnsignedInt m_lastSecond;
 
 	Bool isGeneralsPacket( TransportMessage *msg );
+	void computeMessageMAC( const TransportMessage *msg, UnsignedByte *macOut );
+
+	UnsignedByte m_authKey[NET_SESSION_KEY_LEN];
+	Bool m_hasAuthKey;
 };
 
 #endif // _TRANSPORT_H_
