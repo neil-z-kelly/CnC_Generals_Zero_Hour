@@ -118,9 +118,9 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
 				msg = readWrapperMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
+				msg = readFileMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
-				msg = readFileAnnounceMessage(data, offset);
+				msg = readFileAnnounceMessage(data, offset, (Int)dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
 				msg = readFileProgressMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_DISCONNECTFRAME) {
@@ -129,6 +129,10 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 				msg = readDisconnectScreenOffMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FRAMERESENDREQUEST) {
 				msg = readFrameResendRequestMessage(data, offset);
+			}
+
+			if (msg == NULL) {
+				break;
 			}
 
 			msg->setExecutionFrame(frame);
@@ -5061,11 +5065,11 @@ NetCommandList * NetPacket::getCommandList() {
 				break;
 			case NETCOMMANDTYPE_FILE:
 				DEBUG_LOG(("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
+				msg = readFileMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEANNOUNCE:
 				DEBUG_LOG(("read file announce message from player %d\n", playerID));
-				msg = readFileAnnounceMessage(m_packet, i);
+				msg = readFileAnnounceMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEPROGRESS:
 				DEBUG_LOG(("read file progress message from player %d\n", playerID));
@@ -5697,55 +5701,100 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
-	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
-	char filename[_MAX_PATH];
-	char *c = filename;
+/**
+ * Copy numBytes from the packet at offset i into dest.  Returns FALSE if the read would
+ * go past the end of the packet, in which case the rest of the packet is discarded by
+ * moving i to the end of the data.
+ */
+static Bool readBoundedBytes(UnsignedByte *data, Int &i, Int dataLength, void *dest, Int numBytes) {
+	if ((i < 0) || (i > dataLength) || (numBytes > (dataLength - i))) {
+		i = dataLength;
+		return FALSE;
+	}
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+	memcpy(dest, data + i, numBytes);
+	i += numBytes;
+	return TRUE;
+}
+
+/**
+ * Copy the NUL-terminated filename at offset i out of the packet.  Returns FALSE if the
+ * filename doesn't fit in filenameSize bytes or isn't terminated within the packet, in
+ * which case the rest of the packet is discarded by moving i to the end of the data.
+ */
+static Bool readBoundedFilename(UnsignedByte *data, Int &i, Int dataLength, char *filename, Int filenameSize) {
+	Int len = 0;
+
+	while ((i >= 0) && (i < dataLength) && (data[i] != 0)) {
+		if (len >= (filenameSize - 1)) {
+			i = dataLength;
+			return FALSE;
+		}
+		filename[len] = (char)data[i];
+		++len;
 		++i;
 	}
-	*c = 0;
-	++i;
+
+	if ((i < 0) || (i >= dataLength)) {
+		// no terminator inside the packet.
+		i = dataLength;
+		return FALSE;
+	}
+
+	filename[len] = 0;
+	++i; // skip the terminator.
+	return TRUE;
+}
+
+NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i, Int dataLength) {
+	char filename[_MAX_PATH];
+	if (!readBoundedFilename(data, i, dataLength, filename, _MAX_PATH)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - bad filename, discarding rest of packet\n"));
+		return NULL;
+	}
+
+	UnsignedInt fileDataLength = 0;
+	if (!readBoundedBytes(data, i, dataLength, &fileDataLength, sizeof(fileDataLength))) {
+		DEBUG_LOG(("NetPacket::readFileMessage - truncated file length, discarding rest of packet\n"));
+		return NULL;
+	}
+
+	if (fileDataLength > (UnsignedInt)(dataLength - i)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - file length %d is bigger than the rest of the packet, discarding rest of packet\n", fileDataLength));
+		i = dataLength;
+		return NULL;
+	}
+
+	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
 	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
-
-	UnsignedInt dataLength = 0;
-	memcpy(&dataLength, data + i, sizeof(dataLength));
-	i += sizeof(dataLength);
-
-	UnsignedByte *buf = NEW UnsignedByte[dataLength];
-	memcpy(buf, data + i, dataLength);
-	i += dataLength;
-
-	msg->setFileData(buf, dataLength);
+	msg->setFileData(data + i, fileDataLength);
+	i += fileDataLength;
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i) {
-	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i, Int dataLength) {
 	char filename[_MAX_PATH];
-	char *c = filename;
-
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
-		++i;
+	if (!readBoundedFilename(data, i, dataLength, filename, _MAX_PATH)) {
+		DEBUG_LOG(("NetPacket::readFileAnnounceMessage - bad filename, discarding rest of packet\n"));
+		return NULL;
 	}
-	*c = 0;
-	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedShort fileID = 0;
-	memcpy(&fileID, data + i, sizeof(fileID));
-	i += sizeof(fileID);
-	msg->setFileID(fileID);
+	if (!readBoundedBytes(data, i, dataLength, &fileID, sizeof(fileID))) {
+		DEBUG_LOG(("NetPacket::readFileAnnounceMessage - truncated file ID, discarding rest of packet\n"));
+		return NULL;
+	}
 
 	UnsignedByte playerMask = 0;
-	memcpy(&playerMask, data + i, sizeof(playerMask));
-	i += sizeof(playerMask);
+	if (!readBoundedBytes(data, i, dataLength, &playerMask, sizeof(playerMask))) {
+		DEBUG_LOG(("NetPacket::readFileAnnounceMessage - truncated player mask, discarding rest of packet\n"));
+		return NULL;
+	}
+
+	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+	msg->setFileID(fileID);
 	msg->setPlayerMask(playerMask);
 
 	return msg;
