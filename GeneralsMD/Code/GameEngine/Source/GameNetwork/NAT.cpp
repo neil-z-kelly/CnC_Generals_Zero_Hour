@@ -161,8 +161,10 @@ NAT::NAT()
 	m_numNodes = 0;
 	m_numRetries = 0;
 	m_previousSourcePort = 0;
-	for(Int i = 0; i < MAX_SLOTS; i++)
+	for(Int i = 0; i < MAX_SLOTS; i++) {
 		m_sourcePorts[i] = 0;
+		m_alternateProbeIPs[i] = 0;
+	}
 	m_spareSocketPort = 0;
 	m_startingPortNumber = 0;
 	m_targetNodeNumber = 0;
@@ -346,36 +348,45 @@ NATConnectionState NAT::connectionUpdate() {
 			DEBUG_LOG(("NAT::connectionUpdate - got a packet from %d.%d.%d.%d:%d, length = %d\n",
 									ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, m_transport->m_inBuffer[i].port, m_transport->m_inBuffer[i].length));
 			UnsignedByte *data = m_transport->m_inBuffer[i].data;
-			if (memcmp(data, "PROBE", strlen("PROBE")) == 0) {
-				Int fromNode = atoi((char *)data + strlen("PROBE"));
+			Int dataLength = m_transport->m_inBuffer[i].length;
+			UnsignedInt fromIP = m_transport->m_inBuffer[i].addr;
+			UnsignedShort fromPort = m_transport->m_inBuffer[i].port;
+			Int fromNode = -1;
+			if (parseProbeNodeNumber(data, dataLength, fromNode)) {
 				DEBUG_LOG(("NAT::connectionUpdate - we've been probed by node %d.\n", fromNode));
 
-				if (fromNode == m_targetNodeNumber) {
+				if (fromNode != m_targetNodeNumber) {
+					DEBUG_LOG(("NAT::connectionUpdate - probe claims to be from node %d, not our target %d, ignoring it.\n", fromNode, m_targetNodeNumber));
+				} else if (isProbeFromExpectedSource(fromIP, targetSlot) == FALSE) {
+#ifdef DEBUG_LOGGING
+					UnsignedInt slotIP = targetSlot->getIP();
+#endif
+					DEBUG_LOG(("NAT::connectionUpdate - probe for node %d came from %d.%d.%d.%d, which isn't the address we negotiated (%d.%d.%d.%d), ignoring it.\n", m_targetNodeNumber,
+											fromIP >> 24, (fromIP >> 16) & 0xff, (fromIP >> 8) & 0xff, fromIP & 0xff,
+											slotIP >> 24, (slotIP >> 16) & 0xff, (slotIP >> 8) & 0xff, slotIP & 0xff));
+				} else {
 					DEBUG_LOG(("NAT::connectionUpdate - probe was sent by our target, setting connection state %d to done.\n", m_targetNodeNumber));
 					setConnectionState(m_targetNodeNumber, NATCONNECTIONSTATE_DONE);
 
-					if (m_transport->m_inBuffer[i].addr != targetSlot->getIP()) {
-						UnsignedInt fromIP = m_transport->m_inBuffer[i].addr;
-#ifdef DEBUG_LOGGING
-						UnsignedInt slotIP = targetSlot->getIP();
-#endif
-						DEBUG_LOG(("NAT::connectionUpdate - incomming packet has different from address than we expected, incoming: %d.%d.%d.%d expected: %d.%d.%d.%d\n",
-												fromIP >> 24, (fromIP >> 16) & 0xff, (fromIP >> 8) & 0xff, fromIP & 0xff,
-												slotIP >> 24, (slotIP >> 16) & 0xff, (slotIP >> 8) & 0xff, slotIP & 0xff));
+					if (fromIP != targetSlot->getIP()) {
+						// this is the other address the matchmaking channel gave us for our target,
+						// so that's the one their NAT is really using.
 						targetSlot->setIP(fromIP);
 					}
-					if (m_transport->m_inBuffer[i].port != targetSlot->getPort()) {
+					if (fromPort != targetSlot->getPort()) {
+						// the port is the part the NAT mangles, so it may differ from the one we were
+						// told, as long as the datagram came from our target's address.
 						DEBUG_LOG(("NAT::connectionUpdate - incoming packet came from a different port than we expected, incoming: %d expected: %d\n",
-												m_transport->m_inBuffer[i].port, targetSlot->getPort()));
-						targetSlot->setPort(m_transport->m_inBuffer[i].port);
-						m_sourcePorts[m_targetNodeNumber] = m_transport->m_inBuffer[i].port;
+												fromPort, targetSlot->getPort()));
+						targetSlot->setPort(fromPort);
+						m_sourcePorts[m_targetNodeNumber] = fromPort;
 					}
 					notifyUsersOfConnectionDone(m_targetNodeNumber);
 				}
 
 				m_transport->m_inBuffer[i].length = 0;
 			}
-			if (memcmp(data, "KEEPALIVE", strlen("KEEPALIVE")) == 0) {
+			if ((dataLength >= (Int)strlen("KEEPALIVE")) && (memcmp(data, "KEEPALIVE", strlen("KEEPALIVE")) == 0)) {
 				// keep alive packet, just toss it.
 				DEBUG_LOG(("NAT::connectionUpdate - got keepalive from %d.%d.%d.%d:%d\n",
 										ip >> 24, (ip >> 16) & 0xff, (ip >> 8) && 0xff, ip & 0xff, m_transport->m_inBuffer[i].port));
@@ -721,6 +732,59 @@ void NAT::doThisConnectionRound() {
 			setConnectionState(i, NATCONNECTIONSTATE_DONE);
 		}
 	}
+}
+
+// parse a "PROBE<node number>" datagram, staying within the number of bytes we actually
+// received.  anything that isn't the prefix followed by a node number is rejected.
+/*static*/ Bool NAT::parseProbeNodeNumber(const UnsignedByte *data, Int length, Int &nodeNumber) {
+	Int prefixLength = strlen("PROBE");
+	if ((data == NULL) || (length <= prefixLength)) {
+		return FALSE;
+	}
+
+	if (memcmp(data, "PROBE", prefixLength) != 0) {
+		return FALSE;
+	}
+
+	Int value = 0;
+	Int numDigits = 0;
+	for (Int i = prefixLength; i < length; ++i) {
+		UnsignedByte c = data[i];
+		if (c == 0) {
+			break;
+		}
+		if ((c < '0') || (c > '9') || (numDigits >= 3)) {
+			return FALSE;
+		}
+		value = (value * 10) + (c - '0');
+		++numDigits;
+	}
+
+	if (numDigits == 0) {
+		return FALSE;
+	}
+
+	nodeNumber = value;
+	return TRUE;
+}
+
+// probes carry nothing that proves who sent them, so the source address of the datagram is
+// what keeps someone else from pointing this peer connection at an address of their choosing.
+// it has to be one of the addresses the matchmaking channel gave us for our target.
+Bool NAT::isProbeFromExpectedSource(UnsignedInt addr, const GameSlot *targetSlot) const {
+	if ((targetSlot == NULL) || (addr == 0)) {
+		return FALSE;
+	}
+
+	if (addr == targetSlot->getIP()) {
+		return TRUE;
+	}
+
+	if ((m_targetNodeNumber < 0) || (m_targetNodeNumber >= MAX_SLOTS)) {
+		return FALSE;
+	}
+
+	return (m_alternateProbeIPs[m_targetNodeNumber] != 0) && (addr == m_alternateProbeIPs[m_targetNodeNumber]);
 }
 
 void NAT::sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode) {
@@ -1070,6 +1134,10 @@ void NAT::gotInternalAddress(Int nodeNumber, UnsignedInt address) {
 		// we have the same IP address, i.e. we are behind the same NAT.
 		// I need to talk directly to his internal address.
 		DEBUG_LOG(("NAT::gotInternalAddress - target and local players have same external address, using internal address.\n"));
+		if ((nodeNumber >= 0) && (nodeNumber < MAX_SLOTS)) {
+			// hang on to the external address, a probe from either of the two is legitimate.
+			m_alternateProbeIPs[nodeNumber] = targetSlot->getIP();
+		}
 		targetSlot->setIP(address); // use the slot's internal address from now on
 	}
 }
