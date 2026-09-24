@@ -92,6 +92,8 @@ protected:
 	void doThisConnectionRound();	///< compute who will connect with who for this round.
 	void setConnectionState(Int nodeNumber, NATConnectionState state); ///< central point for changing a connection's state.
 	void sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode);	///< send a "PROBE" packet to this IP and port.
+	static Bool parseProbeNodeNumber(const UnsignedByte *data, Int length, Int &nodeNumber); ///< length bounded parse of a "PROBE<node number>" datagram.
+	Bool isProbeFromExpectedSource(UnsignedInt addr, const GameSlot *targetSlot) const; ///< is this datagram source a valid endpoint for our target's probes?
 	void notifyTargetOfProbe(GameSlot *targetSlot);
 	void notifyUsersOfConnectionDone(Int nodeIndex);
 	void notifyUsersOfConnectionFailed(Int nodeIndex);
@@ -131,6 +133,8 @@ protected:
 	ConnectionNodeType m_connectionNodes[MAX_SLOTS]; ///< info regarding the nodes that are being connected.
 
 	UnsignedShort m_sourcePorts[MAX_SLOTS]; ///< the source ports that the other players communicate to us on.
+
+	UnsignedInt m_alternateProbeIPs[MAX_SLOTS]; ///< the other address the matchmaking channel gave us for each node (internal vs. external when behind the same NAT).
 
 	Bool m_myConnections[MAX_SLOTS]; ///< keeps track of all the nodes I've connected to. For keepalive.
 	time_t m_nextKeepaliveTime; ///< the next time we will send out our keepalive packets.
