@@ -38,6 +38,10 @@
 //#pragma MESSAGE("************************************** WARNING, optimization disabled for debugging purposes")
 #endif
 
+// Upper bound on the reassembled size of a command sent in wrapper chunks and on the size
+// of a transferred file, used to reject lengths forged in a received packet.
+static const UnsignedInt MAX_WRAPPED_COMMAND_SIZE = 64 * 1024 * 1024;
+
 // This function assumes that all of the fields are either of default value or are
 // present in the raw data.
 NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data, UnsignedShort dataLength) {
@@ -116,9 +120,9 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 			} else if (commandType == NETCOMMANDTYPE_TIMEOUTSTART) {
 				msg = readTimeOutGameStartMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
-				msg = readWrapperMessage(data, offset);
+				msg = readWrapperMessage(data, offset, dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
+				msg = readFileMessage(data, offset, dataLength);
 			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
 				msg = readFileAnnounceMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
@@ -129,6 +133,10 @@ NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data,
 				msg = readDisconnectScreenOffMessage(data, offset);
 			} else if (commandType == NETCOMMANDTYPE_FRAMERESENDREQUEST) {
 				msg = readFrameResendRequestMessage(data, offset);
+			}
+
+			if (msg == NULL) {
+				break;
 			}
 
 			msg->setExecutionFrame(frame);
@@ -5055,13 +5063,15 @@ NetCommandList * NetPacket::getCommandList() {
 				break;
 			case NETCOMMANDTYPE_WRAPPER:
 				DEBUG_LOG(("read Wrapper message from player %d\n", playerID));
-				msg = readWrapperMessage(m_packet, i);
-				DEBUG_LOG(("Done reading Wrapper message from player %d - wrapped command was %d\n", playerID,
-					((NetWrapperCommandMsg *)msg)->getWrappedCommandID()));
+				msg = readWrapperMessage(m_packet, i, m_packetLen);
+				if (msg != NULL) {
+					DEBUG_LOG(("Done reading Wrapper message from player %d - wrapped command was %d\n", playerID,
+						((NetWrapperCommandMsg *)msg)->getWrappedCommandID()));
+				}
 				break;
 			case NETCOMMANDTYPE_FILE:
 				DEBUG_LOG(("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
+				msg = readFileMessage(m_packet, i, m_packetLen);
 				break;
 			case NETCOMMANDTYPE_FILEANNOUNCE:
 				DEBUG_LOG(("read file announce message from player %d\n", playerID));
@@ -5648,34 +5658,35 @@ NetCommandMsg * NetPacket::readTimeOutGameStartMessage(UnsignedByte *data, Int &
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
-	NetWrapperCommandMsg *msg = newInstance(NetWrapperCommandMsg);
+NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i, Int packetLen) {
+	const Int headerSize = sizeof(UnsignedShort) + (4 * sizeof(UnsignedInt));
+	if ((i < 0) || (packetLen < i) || ((packetLen - i) < headerSize)) {
+		DEBUG_LOG(("NetPacket::readWrapperMessage - truncated wrapper header, discarding the rest of the packet\n"));
+		i = packetLen;
+		return NULL;
+	}
 
 	// get the wrapped command ID
 	UnsignedShort wrappedCommandID = 0;
 	memcpy(&wrappedCommandID, data + i, sizeof(wrappedCommandID));
-	msg->setWrappedCommandID(wrappedCommandID);
 	i += sizeof(wrappedCommandID);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - wrapped command ID == %d\n", wrappedCommandID));
 
 	// get the chunk number.
 	UnsignedInt chunkNumber = 0;
 	memcpy(&chunkNumber, data + i, sizeof(chunkNumber));
-	msg->setChunkNumber(chunkNumber);
 	i += sizeof(chunkNumber);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - chunk number = %d\n", chunkNumber));
 
 	// get the number of chunks
 	UnsignedInt numChunks = 0;
 	memcpy(&numChunks, data + i, sizeof(numChunks));
-	msg->setNumChunks(numChunks);
 	i += sizeof(numChunks);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - number of chunks = %d\n", numChunks));
 
 	// get the total data length
 	UnsignedInt totalDataLength = 0;
 	memcpy(&totalDataLength, data + i, sizeof(totalDataLength));
-	msg->setTotalDataLength(totalDataLength);
 	i += sizeof(totalDataLength);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - total data length = %d\n", totalDataLength));
 
@@ -5687,39 +5698,67 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 
 	UnsignedInt dataOffset = 0;
 	memcpy(&dataOffset, data + i, sizeof(dataOffset));
-	msg->setDataOffset(dataOffset);
 	i += sizeof(dataOffset);
 	DEBUG_LOG(("NetPacket::readWrapperMessage - data offset = %d\n", dataOffset));
 
+	// the chunk data has to be entirely within the bytes that were actually received, and it
+	// has to describe a chunk of a reassembled command of a sane size.
+	const UnsignedInt bytesLeft = (UnsignedInt)(packetLen - i);
+	if ((dataLength > bytesLeft) ||
+			(totalDataLength > MAX_WRAPPED_COMMAND_SIZE) ||
+			(numChunks == 0) || (numChunks > totalDataLength) ||
+			(chunkNumber >= numChunks) ||
+			(dataOffset > totalDataLength) || (dataLength > (totalDataLength - dataOffset))) {
+		DEBUG_LOG(("NetPacket::readWrapperMessage - bad chunk description, discarding the rest of the packet\n"));
+		i = packetLen;
+		return NULL;
+	}
+
+	NetWrapperCommandMsg *msg = newInstance(NetWrapperCommandMsg);
+	msg->setWrappedCommandID(wrappedCommandID);
+	msg->setChunkNumber(chunkNumber);
+	msg->setNumChunks(numChunks);
+	msg->setTotalDataLength(totalDataLength);
+	msg->setDataOffset(dataOffset);
 	msg->setData(data + i, dataLength);
 	i += dataLength;
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
-	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
+NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i, Int packetLen) {
 	char filename[_MAX_PATH];
-	char *c = filename;
+	Int nameLength = 0;
 
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+	while ((i < packetLen) && (nameLength < (_MAX_PATH - 1)) && (data[i] != 0)) {
+		filename[nameLength] = data[i];
+		++nameLength;
 		++i;
 	}
-	*c = 0;
+	filename[nameLength] = 0;
+
+	// the filename has to be terminated within the packet, and the data length has to follow it.
+	if ((i >= packetLen) || (data[i] != 0) || ((packetLen - (i + 1)) < (Int)sizeof(UnsignedInt))) {
+		DEBUG_LOG(("NetPacket::readFileMessage - truncated file message, discarding the rest of the packet\n"));
+		i = packetLen;
+		return NULL;
+	}
 	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedInt dataLength = 0;
 	memcpy(&dataLength, data + i, sizeof(dataLength));
 	i += sizeof(dataLength);
 
-	UnsignedByte *buf = NEW UnsignedByte[dataLength];
-	memcpy(buf, data + i, dataLength);
-	i += dataLength;
+	if ((dataLength > (UnsignedInt)(packetLen - i)) || (dataLength > MAX_WRAPPED_COMMAND_SIZE)) {
+		DEBUG_LOG(("NetPacket::readFileMessage - file data length %d exceeds the received packet, discarding the rest of the packet\n", dataLength));
+		i = packetLen;
+		return NULL;
+	}
 
-	msg->setFileData(buf, dataLength);
+	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+	msg->setFileData(data + i, dataLength);
+	i += dataLength;
 
 	return msg;
 }
