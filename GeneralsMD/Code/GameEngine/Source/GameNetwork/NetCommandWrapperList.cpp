@@ -34,6 +34,9 @@
 ////// NetCommandWrapperListNode ///////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Upper bound on the size of a command that can be reassembled from wrapper chunks.
+static const UnsignedInt MAX_WRAPPED_COMMAND_LENGTH = 8 * 1024 * 1024;
+
 NetCommandWrapperListNode::NetCommandWrapperListNode(NetWrapperCommandMsg *msg) 
 {
 	//Added By Sadullah Nader
@@ -42,18 +45,38 @@ NetCommandWrapperListNode::NetCommandWrapperListNode(NetWrapperCommandMsg *msg)
 
 	//
 
-	m_numChunks = msg->getNumChunks();
-	m_chunksPresent = NEW Bool[m_numChunks];	// pool[]ify
+	m_numChunks = 0;
 	m_numChunksPresent = 0;
+	m_chunksPresent = NULL;
+	m_dataLength = 0;
+	m_data = NULL;
+	m_isValid = FALSE;
+	m_commandID = msg->getWrappedCommandID();
 
-	for (Int i = 0; i < m_numChunks; ++i) {
+	UnsignedInt numChunks = msg->getNumChunks();
+	UnsignedInt dataLength = msg->getTotalDataLength();
+
+	// These fields come straight off the wire, so reject anything that could not have been
+	// produced by NetPacket::ConstructBigCommandPacketList before allocating from them.  Every
+	// chunk holds at least one byte and at most MAX_PACKET_SIZE bytes of the wrapped command.
+	if ((numChunks == 0) || (dataLength == 0) || (dataLength > MAX_WRAPPED_COMMAND_LENGTH) ||
+			(numChunks > dataLength) || (dataLength > (numChunks * (UnsignedInt)MAX_PACKET_SIZE))) {
+		DEBUG_LOG(("NetCommandWrapperListNode - rejecting wrapper command %d with %d chunks and total length %d\n",
+			m_commandID, numChunks, dataLength));
+		return;
+	}
+
+	m_numChunks = numChunks;
+	m_chunksPresent = NEW Bool[m_numChunks];	// pool[]ify
+
+	for (UnsignedInt i = 0; i < m_numChunks; ++i) {
 		m_chunksPresent[i] = FALSE;
 	}
 
-	m_dataLength = msg->getTotalDataLength();
+	m_dataLength = dataLength;
 	m_data = NEW UnsignedByte[m_dataLength];	// pool[]ify
 
-	m_commandID = msg->getWrappedCommandID();
+	m_isValid = TRUE;
 }
 
 NetCommandWrapperListNode::~NetCommandWrapperListNode() {
@@ -69,10 +92,17 @@ NetCommandWrapperListNode::~NetCommandWrapperListNode() {
 }
 
 Bool NetCommandWrapperListNode::isComplete() {
-	return m_numChunksPresent == m_numChunks;
+	return m_isValid && (m_numChunksPresent == m_numChunks);
+}
+
+Bool NetCommandWrapperListNode::isValid() {
+	return m_isValid;
 }
 
 Int NetCommandWrapperListNode::getPercentComplete(void) {
+	if (!m_isValid)
+		return 0;
+
 	if (isComplete())
 		return 100;
 	else
@@ -93,10 +123,24 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 		return;
 	}
 
+	if (!m_isValid) {
+		return;
+	}
+
 	DEBUG_ASSERTCRASH(msg->getChunkNumber() < m_numChunks, ("MunkeeChunk %d of %d\n",
 		msg->getChunkNumber(), m_numChunks));
 	if (msg->getChunkNumber() >= m_numChunks)
 		return;
+
+	// The offset and length are attacker controllable, so make sure the chunk lands entirely
+	// inside the reassembly buffer.  Written so it cannot overflow the arithmetic.
+	UnsignedInt offset = msg->getDataOffset();
+	UnsignedInt length = msg->getDataLength();
+	if ((length > m_dataLength) || (offset > (m_dataLength - length))) {
+		DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - rejecting chunk %d at offset %d of length %d, buffer is %d bytes\n",
+			msg->getChunkNumber(), offset, length, m_dataLength));
+		return;
+	}
 
 	DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - copying chunk %d\n",
 		msg->getChunkNumber()));
@@ -107,8 +151,7 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 	}
 
 	m_chunksPresent[msg->getChunkNumber()] = TRUE;
-	UnsignedInt offset = msg->getDataOffset();
-	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
+	memcpy(m_data + offset, msg->getData(), length);
 	++m_numChunksPresent;
 }
 
