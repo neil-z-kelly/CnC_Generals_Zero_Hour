@@ -34,6 +34,7 @@
 #include "GameNetwork/NAT.h"
 #include "GameNetwork/Transport.h"
 #include "GameNetwork/NetworkDefs.h"
+#include "GameClient/ClientRandomValue.h"
 #include "GameClient/EstablishConnectionsMenu.h"
 #include "GameNetwork/NetworkInterface.h"
 #include "GameNetwork/GameInfo.h"
@@ -161,8 +162,11 @@ NAT::NAT()
 	m_numNodes = 0;
 	m_numRetries = 0;
 	m_previousSourcePort = 0;
-	for(Int i = 0; i < MAX_SLOTS; i++)
+	for(Int i = 0; i < MAX_SLOTS; i++) {
 		m_sourcePorts[i] = 0;
+		m_localProbeTokens[i] = 0;
+		m_targetProbeTokens[i] = 0;
+	}
 	m_spareSocketPort = 0;
 	m_startingPortNumber = 0;
 	m_targetNodeNumber = 0;
@@ -346,11 +350,21 @@ NATConnectionState NAT::connectionUpdate() {
 			DEBUG_LOG(("NAT::connectionUpdate - got a packet from %d.%d.%d.%d:%d, length = %d\n",
 									ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, m_transport->m_inBuffer[i].port, m_transport->m_inBuffer[i].length));
 			UnsignedByte *data = m_transport->m_inBuffer[i].data;
-			if (memcmp(data, "PROBE", strlen("PROBE")) == 0) {
-				Int fromNode = atoi((char *)data + strlen("PROBE"));
-				DEBUG_LOG(("NAT::connectionUpdate - we've been probed by node %d.\n", fromNode));
+			Int dataLength = m_transport->m_inBuffer[i].length;
+			if ((dataLength >= (Int)strlen("PROBE")) && (memcmp(data, "PROBE", strlen("PROBE")) == 0)) {
+				Int fromNode = -1;
+				UnsignedInt probeToken = 0;
+				Bool isValidProbe = parseProbePacket(data, dataLength, &fromNode, &probeToken);
 
-				if (fromNode == m_targetNodeNumber) {
+				if (isValidProbe == FALSE) {
+					DEBUG_LOG(("NAT::connectionUpdate - discarding a malformed probe packet.\n"));
+				} else if (fromNode != m_targetNodeNumber) {
+					DEBUG_LOG(("NAT::connectionUpdate - discarding a probe from node %d, we are connecting to node %d.\n", fromNode, m_targetNodeNumber));
+				} else if ((m_localProbeTokens[m_targetNodeNumber] == 0) || (probeToken != m_localProbeTokens[m_targetNodeNumber])) {
+					// the probe doesn't carry the token we handed to our target over the GameSpy channel, so
+					// whoever sent it is not our target.
+					DEBUG_LOG(("NAT::connectionUpdate - discarding a probe claiming to be from node %d with an invalid token.\n", fromNode));
+				} else {
 					DEBUG_LOG(("NAT::connectionUpdate - probe was sent by our target, setting connection state %d to done.\n", m_targetNodeNumber));
 					setConnectionState(m_targetNodeNumber, NATCONNECTIONSTATE_DONE);
 
@@ -375,7 +389,7 @@ NATConnectionState NAT::connectionUpdate() {
 
 				m_transport->m_inBuffer[i].length = 0;
 			}
-			if (memcmp(data, "KEEPALIVE", strlen("KEEPALIVE")) == 0) {
+			if ((dataLength >= (Int)strlen("KEEPALIVE")) && (memcmp(data, "KEEPALIVE", strlen("KEEPALIVE")) == 0)) {
 				// keep alive packet, just toss it.
 				DEBUG_LOG(("NAT::connectionUpdate - got keepalive from %d.%d.%d.%d:%d\n",
 										ip >> 24, (ip >> 16) & 0xff, (ip >> 8) && 0xff, ip & 0xff, m_transport->m_inBuffer[i].port));
@@ -396,7 +410,7 @@ NATConnectionState NAT::connectionUpdate() {
 			} else {
 				DEBUG_LOG(("NAT::connectionUpdate - trying to send another probe (#%d) to our target\n", m_numRetries+1));
 				// Send a probe.
-				sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber);
+				sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber, m_targetProbeTokens[m_targetNodeNumber]);
 //				m_timeTillNextSend = timeGetTime() + TheGameSpyConfig->getRetryInterval();
 				m_timeTillNextSend = timeGetTime() + m_timeBetweenRetries;
 
@@ -666,12 +680,20 @@ void NAT::doThisConnectionRound() {
 	m_beenProbed = FALSE;
 	m_numRetries = 0;
 
+	for (i = 0; i < MAX_SLOTS; ++i) {
+		m_localProbeTokens[i] = 0;
+		m_targetProbeTokens[i] = 0;
+	}
+
 	for (i = 0; i < m_numNodes; ++i) {
 		Int targetNodeNumber = m_connectionPairs[m_connectionPairIndex][m_connectionRound][i];
 		DEBUG_LOG(("NAT::doThisConnectionRound - node %d needs to connect to node %d\n", i, targetNodeNumber));
 		if (targetNodeNumber != -1) {
 			if (i == m_localNodeNumber) {
 				m_targetNodeNumber = targetNodeNumber;
+				// the target has to echo this token in its probes, it gets to know about it through the
+				// GameSpy channel rather than through the unauthenticated negotiation socket.
+				m_localProbeTokens[m_targetNodeNumber] = generateProbeToken();
 				DEBUG_LOG(("NAT::doThisConnectionRound - Local node is connecting to node %d\n", m_targetNodeNumber));
 				UnsignedInt targetSlotIndex = m_connectionNodes[(m_connectionPairs[m_connectionPairIndex][m_connectionRound][i])].m_slotIndex;
 				GameSlot *targetSlot = m_slotList[targetSlotIndex];
@@ -723,11 +745,56 @@ void NAT::doThisConnectionRound() {
 	}
 }
 
-void NAT::sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode) {
+UnsignedInt NAT::generateProbeToken() {
+	UnsignedInt token = 0;
+	while (token == 0) {
+		token = (((UnsignedInt)GameClientRandomValue(0, 0xffff)) << 16) | ((UnsignedInt)GameClientRandomValue(0, 0xffff));
+	}
+	return token;
+}
+
+// returns TRUE and fills in the sending node number and the token if this is a well formed probe packet.
+Bool NAT::parseProbePacket(const UnsignedByte *data, Int length, Int *fromNode, UnsignedInt *token) {
+	if ((data == NULL) || (length <= (Int)strlen("PROBE")) || (length > MAX_MESSAGE_LEN)) {
+		return FALSE;
+	}
+
+	// the body is parsed as a string, so it has to be terminated within the packet.
+	if (data[length - 1] != 0) {
+		return FALSE;
+	}
+
+	if (memcmp(data, "PROBE", strlen("PROBE")) != 0) {
+		return FALSE;
+	}
+
+	Int node = -1;
+	UnsignedInt probeToken = 0;
+	if (sscanf((const char *)data + strlen("PROBE"), "%d %X", &node, &probeToken) != 2) {
+		return FALSE;
+	}
+
+	if ((node < 0) || (node >= (Int)m_numNodes)) {
+		return FALSE;
+	}
+
+	*fromNode = node;
+	*token = probeToken;
+	return TRUE;
+}
+
+void NAT::sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode, UnsignedInt token) {
+	if (token == 0) {
+		// we haven't been told which token our target wants to see yet, sending a probe without one
+		// would just get dropped.
+		DEBUG_LOG(("NAT::sendAProbe - no probe token for our target yet, not sending a probe.\n"));
+		return;
+	}
+
 	DEBUG_LOG(("NAT::sendAProbe - sending a probe from port %d to %d.%d.%d.%d:%d\n", getSlotPort(m_connectionNodes[m_localNodeNumber].m_slotIndex),
 							ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, port));
 	AsciiString str;
-	str.format("PROBE%d", fromNode);
+	str.format("PROBE%d %08X", fromNode, token);
 	m_transport->queueSend(ip, port, (unsigned char *)str.str(), str.getLength() + 1);
 	m_transport->doSend();
 }
@@ -992,7 +1059,7 @@ void NAT::probed(Int nodeNumber) {
 				DEBUG_LOG(("NAT::probed - still waiting for mangled port\n"));
 			} else {
 				DEBUG_LOG(("NAT::probed - sending a probe to %ls\n", targetSlot->getName().str()));
-				sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber);
+				sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber, m_targetProbeTokens[m_targetNodeNumber]);
 				notifyTargetOfProbe(targetSlot);
 				setConnectionState(m_localNodeNumber, NATCONNECTIONSTATE_WAITINGFORRESPONSE);
 			}
@@ -1040,7 +1107,7 @@ void NAT::gotMangledPort(Int nodeNumber, UnsignedShort mangledPort) {
 		DEBUG_LOG(("NAT::gotMangledPort - don't have a netgear or we have already been probed, or both my target and I have a netgear, send a PROBE. Sending to %d.%d.%d.%d:%d\n",
 								ip >> 24, (ip >> 16) & 0xff, (ip >> 8) & 0xff, ip & 0xff, targetSlot->getPort()));
 
-		sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber);
+		sendAProbe(targetSlot->getIP(), targetSlot->getPort(), m_localNodeNumber, m_targetProbeTokens[m_targetNodeNumber]);
 		notifyTargetOfProbe(targetSlot);
 		setConnectionState(m_localNodeNumber, NATCONNECTIONSTATE_WAITINGFORRESPONSE);
 	} else {
@@ -1185,7 +1252,7 @@ void NAT::notifyUsersOfConnectionFailed(Int nodeIndex) {
 void NAT::sendMangledPortNumberToTarget(UnsignedShort mangledPort, GameSlot *targetSlot) {
 	PeerRequest req;
 	AsciiString options;
-	options.format("PORT%d %d %08X", m_localNodeNumber, mangledPort, m_localIP);
+	options.format("PORT%d %d %08X %08X", m_localNodeNumber, mangledPort, m_localIP, m_localProbeTokens[m_targetNodeNumber]);
 
 	req.peerRequestType = PeerRequest::PEERREQUEST_UTMPLAYER;
 	req.UTM.isStagingRoom = TRUE;
@@ -1251,7 +1318,7 @@ void NAT::processGlobalMessage(Int slotNum, const char *options) {
 			setConnectionState(node, NATCONNECTIONSTATE_FAILED);
 		}
 	} else if (!strncmp(ptr, "PORT", strlen("PORT"))) {
-		// format: PORT<node number> <port number> <internal IP>
+		// format: PORT<node number> <port number> <internal IP> <probe token>
 		// we should get the node number and the mangled port number of the client we
 		// are supposed to be communicating with and start probing them. No, that was not
 		// meant to be a phallic reference, you sicko.
@@ -1265,13 +1332,22 @@ void NAT::processGlobalMessage(Int slotNum, const char *options) {
 		}
 		UnsignedInt intport = 0;
 		UnsignedInt addr = 0;
-		sscanf(c, "%d %X", &intport, &addr);
+		UnsignedInt token = 0;
+		Int numFields = sscanf(c, "%d %X %X", &intport, &addr, &token);
 		UnsignedShort port = (UnsignedShort)intport;
 
 		DEBUG_LOG(("NAT::processGlobalMessage - got port message from node %d, port: %d, internal address: %d.%d.%d.%d\n", node, port,
 								addr >> 24, (addr >> 16) & 0xff, (addr >> 8) & 0xff, addr & 0xff));
 
 		if ((node >= 0) && (node < m_numNodes)) {
+			if ((numFields < 3) || (token == 0)) {
+				// without a token we have no way of telling our target's probes from anyone else's,
+				// so don't start probing at all.
+				DEBUG_LOG(("NAT::processGlobalMessage - port message from node %d has no probe token, ignoring it\n", node));
+				return;
+			}
+			m_targetProbeTokens[node] = token;
+
 			if (port < 1024) {
 				// it has to be less than 65535 cause its a short duh.
 				DEBUG_ASSERTCRASH(port >= 1024, ("Was passed an invalid port number"));

@@ -91,7 +91,9 @@ protected:
 
 	void doThisConnectionRound();	///< compute who will connect with who for this round.
 	void setConnectionState(Int nodeNumber, NATConnectionState state); ///< central point for changing a connection's state.
-	void sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode);	///< send a "PROBE" packet to this IP and port.
+	void sendAProbe(UnsignedInt ip, UnsignedShort port, Int fromNode, UnsignedInt token);	///< send a "PROBE" packet to this IP and port.
+	Bool parseProbePacket(const UnsignedByte *data, Int length, Int *fromNode, UnsignedInt *token); ///< bounds check and parse an incoming "PROBE" packet.
+	UnsignedInt generateProbeToken(); ///< make up a new random, non-zero probe token.
 	void notifyTargetOfProbe(GameSlot *targetSlot);
 	void notifyUsersOfConnectionDone(Int nodeIndex);
 	void notifyUsersOfConnectionFailed(Int nodeIndex);
@@ -131,6 +133,9 @@ protected:
 	ConnectionNodeType m_connectionNodes[MAX_SLOTS]; ///< info regarding the nodes that are being connected.
 
 	UnsignedShort m_sourcePorts[MAX_SLOTS]; ///< the source ports that the other players communicate to us on.
+
+	UnsignedInt m_localProbeTokens[MAX_SLOTS];	///< the tokens each node has to put in the probes it sends us, handed to them over the GameSpy channel.
+	UnsignedInt m_targetProbeTokens[MAX_SLOTS];	///< the tokens each node requires us to put in the probes we send them.
 
 	Bool m_myConnections[MAX_SLOTS]; ///< keeps track of all the nodes I've connected to. For keepalive.
 	time_t m_nextKeepaliveTime; ///< the next time we will send out our keepalive packets.
