@@ -30,6 +30,37 @@
 #include "GameNetwork/NetCommandWrapperList.h"
 #include "GameNetwork/NetPacket.h"
 
+// Protocol maxima for a wrapped (chunked) command.  Wrapper fields come straight off the
+// wire, so they are bounded before anything is allocated or copied.
+static const UnsignedInt MAX_WRAPPER_DATA_LENGTH = 8 * 1024 * 1024;
+static const UnsignedInt MAX_WRAPPER_CHUNKS = 65536;
+
+// Returns TRUE if the chunk counts and total length of a wrapper message are within
+// the protocol maxima and consistent with each other.
+static Bool isWrapperHeaderValid(NetWrapperCommandMsg *msg) {
+	if (msg == NULL) {
+		return FALSE;
+	}
+
+	UnsignedInt numChunks = msg->getNumChunks();
+	UnsignedInt totalDataLength = msg->getTotalDataLength();
+
+	if ((numChunks == 0) || (numChunks > MAX_WRAPPER_CHUNKS)) {
+		return FALSE;
+	}
+
+	if ((totalDataLength == 0) || (totalDataLength > MAX_WRAPPER_DATA_LENGTH)) {
+		return FALSE;
+	}
+
+	// every chunk has to carry at least one byte.
+	if (numChunks > totalDataLength) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 ////// NetCommandWrapperListNode ///////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -98,6 +129,20 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 	if (msg->getChunkNumber() >= m_numChunks)
 		return;
 
+	// the chunk has to agree with the layout this node was allocated for.
+	if ((msg->getNumChunks() != m_numChunks) || (msg->getTotalDataLength() != m_dataLength)) {
+		return;
+	}
+
+	UnsignedInt offset = msg->getDataOffset();
+	UnsignedInt dataLength = msg->getDataLength();
+
+	// keep the copy inside the reassembly buffer.  computed without any addition so an
+	// attacker can't wrap the arithmetic around.
+	if ((offset > m_dataLength) || (dataLength > (m_dataLength - offset))) {
+		return;
+	}
+
 	DEBUG_LOG(("NetCommandWrapperListNode::copyChunkData() - copying chunk %d\n",
 		msg->getChunkNumber()));
 
@@ -107,8 +152,7 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 	}
 
 	m_chunksPresent[msg->getChunkNumber()] = TRUE;
-	UnsignedInt offset = msg->getDataOffset();
-	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
+	memcpy(m_data + offset, msg->getData(), dataLength);
 	++m_numChunksPresent;
 }
 
@@ -163,6 +207,11 @@ Int NetCommandWrapperList::getPercentComplete(UnsignedShort wrappedCommandID)
 void NetCommandWrapperList::processWrapper(NetCommandRef *ref) {
 	NetCommandWrapperListNode *temp = m_list;
 	NetWrapperCommandMsg *msg = (NetWrapperCommandMsg *)(ref->getCommand());
+
+	if (!isWrapperHeaderValid(msg)) {
+		DEBUG_LOG(("NetCommandWrapperList::processWrapper() - ignoring wrapper command with bad chunk layout\n"));
+		return;
+	}
 
 	while ((temp != NULL) && (temp->getCommandID() != msg->getWrappedCommandID())) {
 		temp = temp->m_next;
