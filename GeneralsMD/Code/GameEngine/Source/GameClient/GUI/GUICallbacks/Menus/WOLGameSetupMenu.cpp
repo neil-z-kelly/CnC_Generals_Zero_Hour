@@ -2419,7 +2419,7 @@ void WOLGameSetupMenuUpdate( WindowLayout * layout, void *userData)
 									WOLDisplaySlotList();
 									DEBUG_LOG(("Slot value is color=%d, PlayerTemplate=%d, startPos=%d, team=%d, IP=0x%8.8X\n",
 										slot->getColor(), slot->getPlayerTemplate(), slot->getStartPos(), slot->getTeamNumber(), slot->getIP()));
-									DEBUG_LOG(("Slot list updated to %s\n", GameInfoToAsciiString(game).str()));
+									DEBUG_LOG(("Slot list updated to %s\n", GameInfoToAsciiString(game, FALSE).str()));
 								}
 							}
 						}

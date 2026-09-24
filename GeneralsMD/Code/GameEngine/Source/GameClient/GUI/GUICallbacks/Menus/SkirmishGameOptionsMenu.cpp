@@ -195,7 +195,7 @@ AsciiString SkirmishPreferences::getSlotList(void)
 
 void SkirmishPreferences::setSlotList(void)
 {
-	setAsciiString("SlotList", GameInfoToAsciiString(TheSkirmishGameInfo));
+	setAsciiString("SlotList", GameInfoToAsciiString(TheSkirmishGameInfo, FALSE));
 }
 
 UnicodeString SkirmishPreferences::getUserName(void)

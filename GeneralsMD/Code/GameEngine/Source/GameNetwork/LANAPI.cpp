@@ -889,6 +889,7 @@ void LANAPI::RequestGameCreate( UnicodeString gameName, Bool isDirectConnect )
 	LANGameInfo *myGame = NEW LANGameInfo;
 	
 	myGame->setSeed(GetTickCount());
+	myGame->generateSessionKey();
 	
 //	myGame->setInProgress(false);
 	myGame->enterGame();

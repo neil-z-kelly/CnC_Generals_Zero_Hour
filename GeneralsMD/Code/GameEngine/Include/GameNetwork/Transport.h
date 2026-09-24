@@ -61,6 +61,25 @@ public:
 
 	inline Bool allowBroadcasts(Bool val) { if (!m_udpsock) return false; return (m_udpsock->AllowBroadcasts(val))?true:false; }
 
+	/**
+	 * Packet authentication.  While a session key is set, every packet carries a
+	 * keyed MAC over the packet contents, and packets that do not carry a valid
+	 * MAC for that key are discarded before they reach the parsers.  With no key
+	 * set (lobby/LAN discovery/NAT negotiation, which happen before a key can be
+	 * agreed on) the tag degenerates to the legacy unkeyed checksum, which only
+	 * detects corruption and authenticates nothing.
+	 */
+	void setSessionKey( const UnsignedByte *key, Int keyLen );
+	void clearSessionKey( void );
+	Bool hasSessionKey( void ) const { return m_hasSessionKey; }
+
+	/**
+	 * Known peer addresses.  While the list is non-empty, datagrams from any other
+	 * source address are dropped without being parsed.
+	 */
+	void clearAllowedPeers( void );
+	void addAllowedPeer( UnsignedInt addr );
+
 	// Latency insertion and packet loss
 	void setLatency( Bool val ) { m_useLatency = val; }
 	void setPacketLoss( Bool val ) { m_usePacketLoss = val; }
@@ -99,6 +118,14 @@ private:
 	Int m_statisticsSlot;
 	UnsignedInt m_lastSecond;
 
+	// Packet authentication state
+	UnsignedByte m_sessionKey[TRANSPORT_SESSION_KEY_LEN];
+	Bool m_hasSessionKey;
+	UnsignedInt m_allowedPeers[MAX_SLOTS];
+	Int m_numAllowedPeers;
+
+	Bool isAllowedPeer( UnsignedInt addr ) const;
+	void computeMessageMac( const TransportMessage *msg, Int dataLen, UnsignedByte *mac ) const;
 	Bool isGeneralsPacket( TransportMessage *msg );
 };
 

@@ -74,10 +74,15 @@ struct CommandPacket
 
 #define MAX_TRANSPORT_STATISTICS_SECONDS 30
 
+// Length of the per-packet authentication tag (truncated HMAC-SHA1) and of the
+// per-game session key used to compute it.
+static const Int TRANSPORT_MAC_LEN = 8;
+static const Int TRANSPORT_SESSION_KEY_LEN = 16;
+
 #pragma pack(push, 1)
 struct TransportMessageHeader
 {
-	UnsignedInt crc;											///< packet-level CRC (must be first in packet)
+	UnsignedByte mac[TRANSPORT_MAC_LEN];	///< packet authentication tag (must be first in packet)
 	UnsignedShort magic;									///< Magic number identifying Generals packets
 //	Int id;
 //	NetMessageFlags flags;
