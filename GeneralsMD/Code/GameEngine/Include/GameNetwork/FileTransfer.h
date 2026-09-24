@@ -46,6 +46,9 @@ AsciiString GetSoloINIFromMap( AsciiString path );
 AsciiString GetAssetUsageFromMap( AsciiString path );
 AsciiString GetReadmeFromMap( AsciiString path );
 
+// Is this network-supplied portable path safe to receive a file into?
+Bool IsValidTransferPortablePath( AsciiString portablePath );
+
 // The meat of file (map) transfers
 Bool DoAnyMapTransfers(GameInfo *game);
 

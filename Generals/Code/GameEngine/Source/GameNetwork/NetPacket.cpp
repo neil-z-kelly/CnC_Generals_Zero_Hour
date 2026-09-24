@@ -5700,14 +5700,16 @@ NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
 NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
 	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
 	char filename[_MAX_PATH];
-	char *c = filename;
+	Int nameLen = 0;
 
 	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+		if (nameLen < (_MAX_PATH - 1)) {
+			filename[nameLen] = data[i];
+			++nameLen;
+		}
 		++i;
 	}
-	*c = 0;
+	filename[nameLen] = 0;
 	++i;
 	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
@@ -5727,14 +5729,16 @@ NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
 NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i) {
 	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
 	char filename[_MAX_PATH];
-	char *c = filename;
+	Int nameLen = 0;
 
 	while (data[i] != 0) {
-		*c = data[i];
-		++c;
+		if (nameLen < (_MAX_PATH - 1)) {
+			filename[nameLen] = data[i];
+			++nameLen;
+		}
 		++i;
 	}
-	*c = 0;
+	filename[nameLen] = 0;
 	++i;
 	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 

@@ -42,6 +42,7 @@
 #include "GameClient/GameText.h"
 #include "GameClient/MessageBox.h"
 #include "GameNetwork/ConnectionManager.h"
+#include "GameNetwork/FileTransfer.h"
 #include "GameNetwork/LANAPICallbacks.h"
 #include "GameNetwork/NAT.h"
 #include "GameNetwork/NetCommandWrapperList.h"
@@ -685,6 +686,15 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls\n", log.str()));
 #endif
 
+	// the filename arrives over the network, so only write it if it resolves inside the
+	// map directories; an unconstrained path lets a peer write anywhere on disk
+	if (!IsValidTransferPortablePath(msg->getPortableFilename()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFile() - rejecting file '%s' from player %d\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
 	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
 	{
 		DEBUG_LOG(("File exists already!\n"));
@@ -763,6 +773,13 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 
 void ConnectionManager::processFileAnnounce(NetFileAnnounceCommandMsg *msg) 
 {
+	if (!IsValidTransferPortablePath(msg->getPortableFilename()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFileAnnounce() - rejecting file '%s' from player %d\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
 	DEBUG_LOG(("ConnectionManager::processFileAnnounce() - expecting '%s' (%s) in command %d\n", msg->getPortableFilename().str(), msg->getRealFilename().str(), msg->getFileID()));
 	s_fileCommandMap[msg->getFileID()] = msg->getRealFilename();
 	s_fileRecipientMaskMap[msg->getFileID()] = msg->getPlayerMask();

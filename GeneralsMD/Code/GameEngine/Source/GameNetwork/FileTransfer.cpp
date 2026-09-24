@@ -38,6 +38,72 @@
 //-------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------
 
+// portable prefixes a transferred file may live under. these mirror the PORTABLE_MAPS and
+// PORTABLE_USER_MAPS prefixes understood by GameState::portableMapPathToRealMapPath().
+static const char *PORTABLE_MAPS_PREFIX = "Maps\\";
+static const char *PORTABLE_USER_MAPS_PREFIX = "UserData\\Maps\\";
+
+static const char *TRANSFERABLE_EXTENSIONS[] = { ".map", ".tga", ".ini", ".str", ".txt", NULL };
+
+static const Int MAX_TRANSFER_PATH_LEN = 200;
+
+static Bool isSafePathComponent( const char *start, const char *end )
+{
+	if (start >= end)
+		return FALSE;
+
+	const char *p;
+	for (p = start; p < end; ++p)
+	{
+		const char c = *p;
+		const Bool isLegal =
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+			c == ' ' || c == '_' || c == '-' || c == '.' || c == '\'' ||
+			c == '(' || c == ')' || c == '&' || c == '+' || c == ',' || c == '!' || c == '#';
+		if (!isLegal)
+			return FALSE;
+	}
+
+	// "." and ".." walk out of the directory, and a leading dot hides the file
+	if (*start == '.')
+		return FALSE;
+
+	// trailing dots and spaces are stripped by the file system, aliasing another name
+	return (end[-1] != '.' && end[-1] != ' ');
+}
+
+Bool IsValidTransferPortablePath( AsciiString portablePath )
+{
+	const char *path = portablePath.str();
+	const Int len = portablePath.getLength();
+	if (len <= 0 || len > MAX_TRANSFER_PATH_LEN)
+		return FALSE;
+
+	const char *rest;
+	if (portablePath.startsWithNoCase(PORTABLE_USER_MAPS_PREFIX))
+		rest = path + strlen(PORTABLE_USER_MAPS_PREFIX);
+	else if (portablePath.startsWithNoCase(PORTABLE_MAPS_PREFIX))
+		rest = path + strlen(PORTABLE_MAPS_PREFIX);
+	else
+		return FALSE;
+
+	// a transferred file is always <prefix><map dir>\<leaf name>
+	const char *sep = strchr(rest, '\\');
+	if (sep == NULL || strchr(sep + 1, '\\') != NULL)
+		return FALSE;
+
+	if (!isSafePathComponent(rest, sep) || !isSafePathComponent(sep + 1, path + len))
+		return FALSE;
+
+	for (Int i = 0; TRANSFERABLE_EXTENSIONS[i] != NULL; ++i)
+	{
+		if (portablePath.endsWithNoCase(TRANSFERABLE_EXTENSIONS[i]))
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 static Bool doFileTransfer( AsciiString filename, MapTransferLoadScreen *ls, Int mask )
 {
 	Bool fileTransferDone = FALSE;
