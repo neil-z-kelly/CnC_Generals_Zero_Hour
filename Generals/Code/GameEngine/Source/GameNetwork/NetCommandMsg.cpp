@@ -836,7 +836,7 @@ NetWrapperCommandMsg::NetWrapperCommandMsg() : NetCommandMsg() {
 
 NetWrapperCommandMsg::~NetWrapperCommandMsg() {
 	if (m_data != NULL) {
-		delete m_data;
+		delete[] m_data;
 		m_data = NULL;
 	}
 }
@@ -848,8 +848,13 @@ UnsignedByte * NetWrapperCommandMsg::getData() {
 void NetWrapperCommandMsg::setData(UnsignedByte *data, UnsignedInt dataLength) 
 {
 	if (m_data != NULL) {
-		delete m_data;
+		delete[] m_data;
 		m_data = NULL;
+	}
+	m_dataLength = 0;
+
+	if ((data == NULL) || (dataLength == 0)) {
+		return;
 	}
 
 	m_data = NEW UnsignedByte[dataLength];	// pool[]ify
@@ -938,9 +943,19 @@ UnsignedByte * NetFileCommandMsg::getFileData() {
 
 void NetFileCommandMsg::setFileData(UnsignedByte *data, UnsignedInt dataLength) 
 {
-	m_dataLength = dataLength;
+	if (m_data != NULL) {
+		delete[] m_data;
+		m_data = NULL;
+	}
+	m_dataLength = 0;
+
+	if ((data == NULL) || (dataLength == 0)) {
+		return;
+	}
+
 	m_data = NEW UnsignedByte[dataLength];	// pool[]ify
 	memcpy(m_data, data, dataLength);
+	m_dataLength = dataLength;
 }
 
 //-------------------------

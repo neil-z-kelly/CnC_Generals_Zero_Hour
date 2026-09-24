@@ -210,8 +210,10 @@ protected:
 	static NetCommandMsg * readProgressMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readLoadCompleteMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readTimeOutGameStartMessage(UnsignedByte *data, Int &i);
-	static NetCommandMsg * readWrapperMessage(UnsignedByte *data, Int &i);
-	static NetCommandMsg * readFileMessage(UnsignedByte *data, Int &i);
+	// packetLen is the number of bytes actually received in data, used to bound the
+	// attacker-supplied lengths in these messages.
+	static NetCommandMsg * readWrapperMessage(UnsignedByte *data, Int &i, Int packetLen);
+	static NetCommandMsg * readFileMessage(UnsignedByte *data, Int &i, Int packetLen);
 	static NetCommandMsg * readFileAnnounceMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readFileProgressMessage(UnsignedByte *data, Int &i);
 	static NetCommandMsg * readDisconnectFrameMessage(UnsignedByte *data, Int &i);
