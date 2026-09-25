@@ -677,6 +677,54 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
 	}
 }
 
+/**
+ * Filenames in file transfer commands come off the wire and are completely untrusted.
+ * Only names that stay inside the map directories, with an extension we actually transfer
+ * during a map transfer, are acceptable.  Anything with a drive letter, a forward slash,
+ * a leading backslash or a parent-directory component is rejected outright.
+ */
+static Bool isAcceptablePortableTransferFilename(const AsciiString& portableFilename)
+{
+	if (portableFilename.isEmpty())
+		return FALSE;
+
+	// must live under one of the map directories.  Save games are never transferred.
+	if (!portableFilename.startsWithNoCase("Maps\\") && !portableFilename.startsWithNoCase("UserData\\Maps\\"))
+		return FALSE;
+
+	const char *componentStart = portableFilename.str();
+	for (const char *c = componentStart; ; ++c)
+	{
+		if (*c == 0 || *c == '\\')
+		{
+			// no empty components (which also catches a trailing separator)
+			if (c == componentStart)
+				return FALSE;
+
+			//
+			// windows strips trailing dots and spaces from each component, so "..", "..."
+			// and ".. " all end up meaning the parent directory.  Reject the lot of them.
+			//
+			if (*(c - 1) == '.' || *(c - 1) == ' ')
+				return FALSE;
+
+			if (*c == 0)
+				break;
+
+			componentStart = c + 1;
+		}
+		else if (*c == '/' || *c == ':' || *c == '*' || *c == '?' || *c == '"' || *c == '<' || *c == '>' || *c == '|' ||
+			(UnsignedByte)(*c) < ' ')
+		{
+			return FALSE;
+		}
+	}
+
+	return portableFilename.endsWithNoCase(".map") || portableFilename.endsWithNoCase(".tga") ||
+		portableFilename.endsWithNoCase(".ini") || portableFilename.endsWithNoCase(".str") ||
+		portableFilename.endsWithNoCase(".txt");
+}
+
 void ConnectionManager::processFile(NetFileCommandMsg *msg) 
 {
 #ifdef _INTERNAL
@@ -685,10 +733,17 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	DEBUG_LOG(("%ls\n", log.str()));
 #endif
 
+	if (!isAcceptablePortableTransferFilename(msg->getPortableFilename()))
+	{
+		DEBUG_LOG(("ConnectionManager::processFile() - refusing file transfer with unacceptable filename '%s' from %d\n",
+			msg->getPortableFilename().str(), msg->getPlayerID()));
+		return;
+	}
+
 	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
 	{
+		// a stale or CRC-mismatched copy of a map file is replaced by the transferred one
 		DEBUG_LOG(("File exists already!\n"));
-		//return;
 	}
 
 	UnsignedByte *buf = msg->getFileData();
