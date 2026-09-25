@@ -429,6 +429,12 @@ Bool ConnectionManager::processNetCommand(NetCommandRef *ref) {
 		return FALSE;
 	}
 
+	// The player ID is taken verbatim from the packet, so it has to be range checked
+	// before it is used as an index into m_connections.
+	if (msg->getPlayerID() >= MAX_SLOTS) {
+		return TRUE;
+	}
+
 	if ((m_connections[msg->getPlayerID()] == NULL) && (msg->getPlayerID() != m_localSlot)) {
 		// if this is from a player that is no longer in the game, then ignore them.
 		return TRUE;
@@ -783,6 +789,12 @@ void ConnectionManager::processFileProgress(NetFileProgressCommandMsg *msg)
 {
 	DEBUG_LOG(("ConnectionManager::processFileProgress() - command %d is at %d%%\n",
 		msg->getFileID(), msg->getProgress()));
+
+	if (msg->getPlayerID() >= MAX_SLOTS) {
+		DEBUG_LOG(("ConnectionManager::processFileProgress() - invalid player ID %d\n", msg->getPlayerID()));
+		return;
+	}
+
 	Int oldProgress = s_fileProgressMap[msg->getPlayerID()][msg->getFileID()];
 
 	s_fileProgressMap[msg->getPlayerID()][msg->getFileID()] = max(oldProgress, msg->getProgress());
