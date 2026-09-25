@@ -681,7 +681,7 @@ void ConnectionManager::processChat(NetChatCommandMsg *msg)
  * Filenames in file transfer commands come off the wire and are completely untrusted.
  * Only names that stay inside the map directories, with an extension we actually transfer
  * during a map transfer, are acceptable.  Anything with a drive letter, a forward slash,
- * a leading backslash or a ".." component is rejected outright.
+ * a leading backslash or a parent-directory component is rejected outright.
  */
 static Bool isAcceptablePortableTransferFilename(const AsciiString& portableFilename)
 {
@@ -692,19 +692,32 @@ static Bool isAcceptablePortableTransferFilename(const AsciiString& portableFile
 	if (!portableFilename.startsWithNoCase("Maps\\") && !portableFilename.startsWithNoCase("UserData\\Maps\\"))
 		return FALSE;
 
-	const char *name = portableFilename.str();
-	for (const char *c = name; *c != 0; ++c)
+	const char *componentStart = portableFilename.str();
+	for (const char *c = componentStart; ; ++c)
 	{
-		if (*c == '/' || *c == ':' || *c == '*' || *c == '?' || *c == '"' || *c == '<' || *c == '>' || *c == '|')
-			return FALSE;
+		if (*c == 0 || *c == '\\')
+		{
+			// no empty components (which also catches a trailing separator)
+			if (c == componentStart)
+				return FALSE;
 
-		// no parent-directory components
-		if (*c == '.' && *(c + 1) == '.' && (c == name || *(c - 1) == '\\') && (*(c + 2) == 0 || *(c + 2) == '\\'))
-			return FALSE;
+			//
+			// windows strips trailing dots and spaces from each component, so "..", "..."
+			// and ".. " all end up meaning the parent directory.  Reject the lot of them.
+			//
+			if (*(c - 1) == '.' || *(c - 1) == ' ')
+				return FALSE;
 
-		// no empty components (which also catches a trailing separator)
-		if (*c == '\\' && (*(c + 1) == 0 || *(c + 1) == '\\'))
+			if (*c == 0)
+				break;
+
+			componentStart = c + 1;
+		}
+		else if (*c == '/' || *c == ':' || *c == '*' || *c == '?' || *c == '"' || *c == '<' || *c == '>' || *c == '|' ||
+			(UnsignedByte)(*c) < ' ')
+		{
 			return FALSE;
+		}
 	}
 
 	return portableFilename.endsWithNoCase(".map") || portableFilename.endsWithNoCase(".tga") ||
@@ -727,10 +740,10 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 		return;
 	}
 
-	const Bool fileExists = TheFileSystem->doesFileExist(msg->getRealFilename().str());
-	if (fileExists)
+	if (TheFileSystem->doesFileExist(msg->getRealFilename().str()))
 	{
-		DEBUG_LOG(("File exists already - not overwriting it with the transferred copy!\n"));
+		// a stale or CRC-mismatched copy of a map file is replaced by the transferred one
+		DEBUG_LOG(("File exists already!\n"));
 	}
 
 	UnsignedByte *buf = msg->getFileData();
@@ -759,21 +772,18 @@ void ConnectionManager::processFile(NetFileCommandMsg *msg)
 	}
 #endif // COMPRESS_TARGAS
 
-	if (!fileExists)
+	File *fp = TheFileSystem->openFile(msg->getRealFilename().str(), File::CREATE | File::BINARY | File::WRITE);
+	if (fp)
 	{
-		File *fp = TheFileSystem->openFile(msg->getRealFilename().str(), File::CREATE | File::BINARY | File::WRITE);
-		if (fp)
-		{
-			fp->write(buf, len);
-			fp->close();
-			fp = NULL;
-			DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,msg->getRealFilename().str()));
+		fp->write(buf, len);
+		fp->close();
+		fp = NULL;
+		DEBUG_LOG(("Wrote %d bytes to file %s!\n",len,msg->getRealFilename().str()));
 
-		}
-		else
-		{
-			DEBUG_LOG(("Cannot open file!\n"));
-		}
+	}
+	else
+	{
+		DEBUG_LOG(("Cannot open file!\n"));
 	}
 
 	DEBUG_LOG(("ConnectionManager::processFile() - sending a NetFileProgressCommandMsg\n"));
