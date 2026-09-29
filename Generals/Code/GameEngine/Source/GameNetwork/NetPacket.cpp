@@ -38,116 +38,217 @@
 //#pragma MESSAGE("************************************** WARNING, optimization disabled for debugging purposes")
 #endif
 
+//-------------------------------------------------------------------------------------------------
+// NetPacketReader
+//-------------------------------------------------------------------------------------------------
+NetPacketReader::NetPacketReader(UnsignedByte *data, Int length) :
+	m_data(data),
+	m_length(length),
+	m_position(0),
+	m_failed(FALSE)
+{
+	if (m_data == NULL || m_length < 0) {
+		m_length = 0;
+	}
+}
+
+UnsignedByte * NetPacketReader::readInPlace(UnsignedInt size) {
+	if (!hasBytes(size)) {
+		m_failed = TRUE;
+		return NULL;
+	}
+	UnsignedByte *retval = m_data + m_position;
+	m_position += (Int)size;
+	return retval;
+}
+
+Bool NetPacketReader::read(void *dest, UnsignedInt size) {
+	UnsignedByte *src = readInPlace(size);
+	if (src == NULL) {
+		return FALSE;
+	}
+	memcpy(dest, src, size);
+	return TRUE;
+}
+
+Bool NetPacketReader::readString(char *dest, Int destSize) {
+	if (m_failed || destSize <= 0) {
+		m_failed = TRUE;
+		return FALSE;
+	}
+	Int maxLength = m_length - m_position;
+	if (maxLength > destSize) {
+		maxLength = destSize;
+	}
+	for (Int len = 0; len < maxLength; ++len) {
+		if (m_data[m_position + len] == 0) {
+			memcpy(dest, m_data + m_position, len + 1);
+			m_position += len + 1;
+			return TRUE;
+		}
+	}
+	// unterminated, or too long for the destination buffer.
+	m_failed = TRUE;
+	return FALSE;
+}
+
 // This function assumes that all of the fields are either of default value or are
-// present in the raw data.
-NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data, UnsignedShort dataLength) {
-	NetCommandType commandType = NETCOMMANDTYPE_GAMECOMMAND;
+// present in the raw data.  Returns NULL if the data is malformed.
+NetCommandRef * NetPacket::ConstructNetCommandMsgFromRawData(UnsignedByte *data, UnsignedInt dataLength) {
+	UnsignedByte commandType = NETCOMMANDTYPE_GAMECOMMAND;
 	UnsignedShort commandID = 0;
 	UnsignedInt frame = 0;
 	UnsignedByte playerID = 0;
 	UnsignedByte relay = 0;
 
-	Int offset = 0;
-	Bool notDone = TRUE;
-	NetCommandRef *ref = NULL;
-	NetCommandMsg *msg = NULL;
+	if (dataLength > MAX_WRAPPED_COMMAND_DATA_LENGTH) {
+		return NULL;
+	}
 
-	while ((offset < (Int)dataLength) && notDone) {
-		if (data[offset] == 'T') {
-			++offset;
-			memcpy(&commandType, data + offset, sizeof(UnsignedByte));
-			offset += sizeof(UnsignedByte);
-		} else if (data[offset] == 'R') {
-			++offset;
-			memcpy(&relay, data + offset, sizeof(UnsignedByte));
-			offset += sizeof(UnsignedByte);
-		} else if (data[offset] == 'P') {
-			++offset;
-			memcpy(&playerID, data + offset, sizeof(UnsignedByte));
-			offset += sizeof(UnsignedByte);
-		} else if (data[offset] == 'C') {
-			++offset;
-			memcpy(&commandID, data + offset, sizeof(UnsignedShort));
-			offset += sizeof(UnsignedShort);
-		} else if (data[offset] == 'F') {
-			++offset;
-			memcpy(&frame, data + offset, sizeof(UnsignedInt));
-			offset += sizeof(UnsignedInt);
-		} else if (data[offset] == 'D') {
-			++offset;
-			if (commandType == NETCOMMANDTYPE_GAMECOMMAND) {
-				msg = readGameMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_ACKBOTH) {
-				msg = readAckBothMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_ACKSTAGE1) {
-				msg = readAckStage1Message(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_ACKSTAGE2) {
-				msg = readAckStage2Message(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_FRAMEINFO) {
-				msg = readFrameMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_PLAYERLEAVE) {
-				msg = readPlayerLeaveMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_RUNAHEADMETRICS) {
-				msg = readRunAheadMetricsMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_RUNAHEAD) {
-				msg = readRunAheadMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DESTROYPLAYER) {
-				msg = readDestroyPlayerMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_KEEPALIVE) {
-				msg = readKeepAliveMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTKEEPALIVE) {
-				msg = readDisconnectKeepAliveMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTPLAYER) {
-				msg = readDisconnectPlayerMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_PACKETROUTERQUERY) {
-				msg = readPacketRouterQueryMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_PACKETROUTERACK) {
-				msg = readPacketRouterAckMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTCHAT) {
-				msg = readDisconnectChatMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTVOTE) {
-				msg = readDisconnectVoteMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_CHAT) {
-				msg = readChatMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_PROGRESS) {
-				msg = readProgressMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_LOADCOMPLETE) {
-				msg = readLoadCompleteMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_TIMEOUTSTART) {
-				msg = readTimeOutGameStartMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
-				msg = readWrapperMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_FILE) {
-				msg = readFileMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_FILEANNOUNCE) {
-				msg = readFileAnnounceMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_FILEPROGRESS) {
-				msg = readFileProgressMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTFRAME) {
-				msg = readDisconnectFrameMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_DISCONNECTSCREENOFF) {
-				msg = readDisconnectScreenOffMessage(data, offset);
-			} else if (commandType == NETCOMMANDTYPE_FRAMERESENDREQUEST) {
-				msg = readFrameResendRequestMessage(data, offset);
+	NetPacketReader reader(data, (Int)dataLength);
+
+	while (!reader.isAtEnd()) {
+		UnsignedByte tag = 0;
+		reader.read(&tag, sizeof(tag));
+		if (tag == 'T') {
+			reader.read(&commandType, sizeof(UnsignedByte));
+		} else if (tag == 'R') {
+			reader.read(&relay, sizeof(UnsignedByte));
+		} else if (tag == 'P') {
+			reader.read(&playerID, sizeof(UnsignedByte));
+		} else if (tag == 'C') {
+			reader.read(&commandID, sizeof(UnsignedShort));
+		} else if (tag == 'F') {
+			reader.read(&frame, sizeof(UnsignedInt));
+		} else if (tag == 'D') {
+			NetCommandMsg *msg = readCommandData((NetCommandType)commandType, reader);
+			if (msg == NULL) {
+				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::ConstructNetCommandMsgFromRawData - malformed command data of type %d\n", commandType));
+				return NULL;
 			}
 
 			msg->setExecutionFrame(frame);
 			msg->setID(commandID);
 			msg->setPlayerID(playerID);
-			msg->setNetCommandType(commandType);
+			msg->setNetCommandType((NetCommandType)commandType);
 
-			ref = NEW_NETCOMMANDREF(msg);
+			NetCommandRef *ref = NEW_NETCOMMANDREF(msg);
 
 			ref->setRelay(relay);
 
 			msg->detach();
 			msg = NULL;
 
-			notDone = FALSE;
+			return ref;
+		} else {
+			DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::ConstructNetCommandMsgFromRawData - unrecognized entry at index %d\n", reader.getPosition() - 1));
+			return NULL;
 		}
 	}
 
-	return ref;
+	return NULL;
+}
+
+/**
+ * Reads the data portion of a command of the given type.  Returns NULL if the command type is
+ * unknown or the data is malformed or truncated.
+ */
+NetCommandMsg * NetPacket::readCommandData(NetCommandType commandType, NetPacketReader &reader) {
+	NetCommandMsg *msg = NULL;
+
+	switch (commandType)
+	{
+	case NETCOMMANDTYPE_GAMECOMMAND:
+		msg = readGameMessage(reader);
+		break;
+	case NETCOMMANDTYPE_ACKBOTH:
+		msg = readAckBothMessage(reader);
+		break;
+	case NETCOMMANDTYPE_ACKSTAGE1:
+		msg = readAckStage1Message(reader);
+		break;
+	case NETCOMMANDTYPE_ACKSTAGE2:
+		msg = readAckStage2Message(reader);
+		break;
+	case NETCOMMANDTYPE_FRAMEINFO:
+		msg = readFrameMessage(reader);
+		break;
+	case NETCOMMANDTYPE_PLAYERLEAVE:
+		msg = readPlayerLeaveMessage(reader);
+		break;
+	case NETCOMMANDTYPE_RUNAHEADMETRICS:
+		msg = readRunAheadMetricsMessage(reader);
+		break;
+	case NETCOMMANDTYPE_RUNAHEAD:
+		msg = readRunAheadMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DESTROYPLAYER:
+		msg = readDestroyPlayerMessage(reader);
+		break;
+	case NETCOMMANDTYPE_KEEPALIVE:
+		msg = readKeepAliveMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTKEEPALIVE:
+		msg = readDisconnectKeepAliveMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTPLAYER:
+		msg = readDisconnectPlayerMessage(reader);
+		break;
+	case NETCOMMANDTYPE_PACKETROUTERQUERY:
+		msg = readPacketRouterQueryMessage(reader);
+		break;
+	case NETCOMMANDTYPE_PACKETROUTERACK:
+		msg = readPacketRouterAckMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTCHAT:
+		msg = readDisconnectChatMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTVOTE:
+		msg = readDisconnectVoteMessage(reader);
+		break;
+	case NETCOMMANDTYPE_CHAT:
+		msg = readChatMessage(reader);
+		break;
+	case NETCOMMANDTYPE_PROGRESS:
+		msg = readProgressMessage(reader);
+		break;
+	case NETCOMMANDTYPE_LOADCOMPLETE:
+		msg = readLoadCompleteMessage(reader);
+		break;
+	case NETCOMMANDTYPE_TIMEOUTSTART:
+		msg = readTimeOutGameStartMessage(reader);
+		break;
+	case NETCOMMANDTYPE_WRAPPER:
+		msg = readWrapperMessage(reader);
+		break;
+	case NETCOMMANDTYPE_FILE:
+		msg = readFileMessage(reader);
+		break;
+	case NETCOMMANDTYPE_FILEANNOUNCE:
+		msg = readFileAnnounceMessage(reader);
+		break;
+	case NETCOMMANDTYPE_FILEPROGRESS:
+		msg = readFileProgressMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTFRAME:
+		msg = readDisconnectFrameMessage(reader);
+		break;
+	case NETCOMMANDTYPE_DISCONNECTSCREENOFF:
+		msg = readDisconnectScreenOffMessage(reader);
+		break;
+	case NETCOMMANDTYPE_FRAMERESENDREQUEST:
+		msg = readFrameResendRequestMessage(reader);
+		break;
+	default:
+		break;
+	}
+
+	if (msg != NULL && reader.hasFailed()) {
+		msg->detach();
+		msg = NULL;
+	}
+
+	return msg;
 }
 
 NetPacketList NetPacket::ConstructBigCommandPacketList(NetCommandRef *ref) {
@@ -1910,6 +2011,10 @@ NetPacket::NetPacket() {
 NetPacket::NetPacket(TransportMessage *msg) {
 	init();
 	m_packetLen = msg->length;
+	if (m_packetLen < 0 || m_packetLen > MAX_PACKET_SIZE) {
+		// too big to be a valid packet; treat it as empty so it gets dropped.
+		m_packetLen = 0;
+	}
 	memcpy(m_packet, msg->data, MAX_PACKET_SIZE);
 	m_numCommands = -1;
 	m_addr = msg->addr;
@@ -4930,7 +5035,8 @@ Bool NetPacket::isRoomForGameMessage(NetCommandRef *msg, GameMessage *gmsg) {
 }
 
 /**
- * Returns the list of commands that are in this packet.
+ * Returns the list of commands that are in this packet.  If the packet is malformed or truncated,
+ * the whole packet is dropped and an empty list is returned.
  */
 NetCommandList * NetPacket::getCommandList() {
 	NetCommandList *retval = newInstance(NetCommandList);
@@ -4945,149 +5051,37 @@ NetCommandList * NetPacket::getCommandList() {
 	UnsignedByte relay = 0;
 	NetCommandRef *lastCommand = NULL;
 
-	Int i = 0;
-	while (i < m_packetLen) {
-		if (m_packet[i] == 'T') {
-			++i;
-			memcpy(&commandType, m_packet + i, sizeof(UnsignedByte));
-			i += sizeof(UnsignedByte);
-		} else if (m_packet[i] == 'F') {
-			++i;
-			memcpy(&frame, m_packet + i, sizeof(UnsignedInt));
-			i += sizeof(UnsignedInt);
-		} else if (m_packet[i] == 'P') {
-			++i;
-			memcpy(&playerID, m_packet + i, sizeof(UnsignedByte));
-			i += sizeof(UnsignedByte);
-		} else if (m_packet[i] == 'R') {
-			++i;
-			memcpy(&relay, m_packet + i, sizeof(UnsignedByte));
-			i += sizeof(UnsignedByte);
-		} else if (m_packet[i] == 'C') {
-			++i;
-			memcpy(&commandID, m_packet + i, sizeof(UnsignedShort));
-			i += sizeof(UnsignedShort);
-		} else if (m_packet[i] == 'D') {
-			++i;
-
-			NetCommandMsg *msg = NULL;
-
+	NetPacketReader reader(m_packet, m_packetLen);
+	while (!reader.isAtEnd()) {
+		UnsignedByte tag = 0;
+		reader.read(&tag, sizeof(tag));
+		if (tag == 'T') {
+			reader.read(&commandType, sizeof(UnsignedByte));
+		} else if (tag == 'F') {
+			reader.read(&frame, sizeof(UnsignedInt));
+		} else if (tag == 'P') {
+			reader.read(&playerID, sizeof(UnsignedByte));
+		} else if (tag == 'R') {
+			reader.read(&relay, sizeof(UnsignedByte));
+		} else if (tag == 'C') {
+			reader.read(&commandID, sizeof(UnsignedShort));
+		} else if (tag == 'D') {
 			//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList() - command of type %d(%s)\n", commandType, GetAsciiNetCommandType((NetCommandType)commandType).str()));
 
-			switch((NetCommandType)commandType)
-			{
-			case NETCOMMANDTYPE_GAMECOMMAND:
-				msg = readGameMessage(m_packet, i);
-				//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read game command from player %d for frame %d\n", playerID, frame));
-				break;
-			case NETCOMMANDTYPE_ACKBOTH:
-				msg = readAckBothMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_ACKSTAGE1:
-				msg = readAckStage1Message(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_ACKSTAGE2:
-				msg = readAckStage2Message(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_FRAMEINFO:
-				msg = readFrameMessage(m_packet, i);
-				// frameinfodebug
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read frame %d from player %d, command count = %d, relay = 0x%X\n", frame, playerID, ((NetFrameCommandMsg *)msg)->getCommandCount(), relay));
-				break;
-			case NETCOMMANDTYPE_PLAYERLEAVE:
-				msg = readPlayerLeaveMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read player leave message from player %d for execution on frame %d\n", playerID, frame));
-				break;
-			case NETCOMMANDTYPE_RUNAHEADMETRICS:
-				msg = readRunAheadMetricsMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_RUNAHEAD:
-				msg = readRunAheadMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read run ahead message from player %d for execution on frame %d\n", playerID, frame));
-				break;
-			case NETCOMMANDTYPE_DESTROYPLAYER:
-				msg = readDestroyPlayerMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read CRC info message from player %d for execution on frame %d\n", playerID, frame));
-				break;
-			case NETCOMMANDTYPE_KEEPALIVE:
-				msg = readKeepAliveMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read keep alive message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_DISCONNECTKEEPALIVE:
-				msg = readDisconnectKeepAliveMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read keep alive message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_DISCONNECTPLAYER:
-				msg = readDisconnectPlayerMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read disconnect player message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_PACKETROUTERQUERY:
-				msg = readPacketRouterQueryMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read packet router query message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_PACKETROUTERACK:
-				msg = readPacketRouterAckMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read packet router ack message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_DISCONNECTCHAT:
-				msg = readDisconnectChatMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read disconnect chat message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_DISCONNECTVOTE:
-				msg = readDisconnectVoteMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read disconnect vote message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_CHAT:
-				msg = readChatMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read chat message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_PROGRESS:
-				msg = readProgressMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read Progress message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_LOADCOMPLETE:
-				msg = readLoadCompleteMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read LoadComplete message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_TIMEOUTSTART:
-				msg = readTimeOutGameStartMessage(m_packet, i);
-//				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read TimeOutGameStart message from player %d\n", playerID));
-				break;
-			case NETCOMMANDTYPE_WRAPPER:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read Wrapper message from player %d\n", playerID));
-				msg = readWrapperMessage(m_packet, i);
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Done reading Wrapper message from player %d - wrapped command was %d\n", playerID,
-					((NetWrapperCommandMsg *)msg)->getWrappedCommandID()));
-				break;
-			case NETCOMMANDTYPE_FILE:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read file message from player %d\n", playerID));
-				msg = readFileMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_FILEANNOUNCE:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read file announce message from player %d\n", playerID));
-				msg = readFileAnnounceMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_FILEPROGRESS:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read file progress message from player %d\n", playerID));
-				msg = readFileProgressMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_DISCONNECTFRAME:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read disconnect frame message from player %d\n", playerID));
-				msg = readDisconnectFrameMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_DISCONNECTSCREENOFF:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read disconnect screen off message from player %d\n", playerID));
-				msg = readDisconnectScreenOffMessage(m_packet, i);
-				break;
-			case NETCOMMANDTYPE_FRAMERESENDREQUEST:
-				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read frame resend request message from player %d\n", playerID));
-				msg = readFrameResendRequestMessage(m_packet, i);
+			NetCommandMsg *msg = readCommandData((NetCommandType)commandType, reader);
+
+			if (msg == NULL) {
+				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - failed to read command of type %d from player %d\n", commandType, playerID));
+				reader.fail();
 				break;
 			}
 
-			if (msg == NULL) {
-				DEBUG_CRASH(("Didn't read a message from the packet. Things are about to go wrong."));
-				continue;
+			if (commandType == NETCOMMANDTYPE_FRAMEINFO) {
+				// frameinfodebug
+				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("read frame %d from player %d, command count = %d, relay = 0x%X\n", frame, playerID, ((NetFrameCommandMsg *)msg)->getCommandCount(), relay));
+			} else if (commandType == NETCOMMANDTYPE_WRAPPER) {
+				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Done reading Wrapper message from player %d - wrapped command was %d\n", playerID,
+					((NetWrapperCommandMsg *)msg)->getWrappedCommandID()));
 			}
 
 			// set the info
@@ -5121,11 +5115,18 @@ NetCommandList * NetPacket::getCommandList() {
 
 			// since the message is part of the list now, we don't have to keep track of it.  So we'll just set it to NULL.
 			msg = NULL;
-		} else if (m_packet[i] == 'Z') {
-			++i;
+		} else if (tag == 'Z') {
 			// Repeat the last command, doing some funky cool byte-saving stuff
 			if (lastCommand == NULL) {
 				DEBUG_CRASH(("Got a repeat command with no command to repeat."));
+				reader.fail();
+				break;
+			}
+			if (lastCommand->getCommand()->getNetCommandType() != (NetCommandType)commandType) {
+				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - repeat of type %d does not match last command type %d\n",
+					commandType, lastCommand->getCommand()->getNetCommandType()));
+				reader.fail();
+				break;
 			}
 			NetCommandMsg *msg = NULL;
 			if (commandType == NETCOMMANDTYPE_ACKSTAGE1) {
@@ -5150,7 +5151,8 @@ NetCommandList * NetPacket::getCommandList() {
 				DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Read a repeated frame command, frame = %d, player = %d, commandID = %d\n", frame, playerID, commandID));
 			} else {
 				DEBUG_CRASH(("Trying to repeat a command that shouldn't be repeated."));
-				continue;
+				reader.fail();
+				break;
 			}
 
 			msg->setExecutionFrame(frame);
@@ -5181,11 +5183,11 @@ NetCommandList * NetPacket::getCommandList() {
 			// since the message is part of the list now, we don't have to keep track of it.  So we'll just set it to NULL.
 			msg = NULL;
 		} else {
-			// we don't recognize this command, but we have to increment i so we don't fall into an infinite loop.
-			DEBUG_CRASH(("Unrecognized packet entry, ignoring."));
-			DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - Unrecognized packet entry at index %d\n", i));
-			dumpPacketToLog();
-			++i;
+			// we don't recognize this entry, so we can't know where the next one starts.
+			DEBUG_CRASH(("Unrecognized packet entry, dropping packet."));
+			DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - Unrecognized packet entry at index %d\n", reader.getPosition() - 1));
+			reader.fail();
+			break;
 		}
 	}
 
@@ -5193,200 +5195,198 @@ NetCommandList * NetPacket::getCommandList() {
 		lastCommand->deleteInstance();
 		lastCommand = NULL;
 	}
+
+	if (reader.hasFailed()) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::getCommandList - malformed packet near index %d, dropping packet\n", reader.getPosition()));
+		dumpPacketToLog();
+		retval->reset();
+	}
+
 	return retval;
 }
 
 /**
  * Reads the data portion of a game message from the given position in the packet.
  */
-NetCommandMsg * NetPacket::readGameMessage(UnsignedByte *data, Int &i) 
+NetCommandMsg * NetPacket::readGameMessage(NetPacketReader &reader)
 {
-	NetGameCommandMsg *msg = newInstance(NetGameCommandMsg);
-
 //	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readGameMessage\n"));
 
 	// Get the GameMessage command type.
 	GameMessage::Type newType;
-	memcpy(&newType, data + i, sizeof(GameMessage::Type));
-	i += sizeof(GameMessage::Type);
-	msg->setGameMessageType(newType);
+	if (!reader.read(&newType, sizeof(GameMessage::Type))) {
+		return NULL;
+	}
 
 	// Get the number of argument types
 	UnsignedByte numArgTypes = 0;
-	memcpy(&numArgTypes, data + i, sizeof(numArgTypes));
-	i += sizeof(numArgTypes);
+	if (!reader.read(&numArgTypes, sizeof(numArgTypes))) {
+		return NULL;
+	}
+
+	NetGameCommandMsg *msg = newInstance(NetGameCommandMsg);
+	msg->setGameMessageType(newType);
 
 	// Get the types and the number of arguments of those types.
+	Bool success = TRUE;
 	Int totalArgCount = 0;
 	GameMessageParser *parser = newInstance(GameMessageParser)();
 	for (Int j = 0; j < numArgTypes; ++j) {
 		UnsignedByte type = (UnsignedByte)ARGUMENTDATATYPE_UNKNOWN;
-		memcpy(&type, data + i, sizeof(type));
-		i += sizeof(type);
-
 		UnsignedByte argCount = 0;
-		memcpy(&argCount, data + i, sizeof(argCount));
-		i += sizeof(argCount);
+		if (!reader.read(&type, sizeof(type)) || !reader.read(&argCount, sizeof(argCount))) {
+			success = FALSE;
+			break;
+		}
+
+		totalArgCount += argCount;
+		if (type >= ARGUMENTDATATYPE_UNKNOWN || argCount == 0 || totalArgCount > MAX_GAME_MESSAGE_ARGUMENTS) {
+			DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readGameMessage - invalid argument type %d or count %d (total %d)\n", type, argCount, totalArgCount));
+			success = FALSE;
+			break;
+		}
 
 		parser->addArgType((GameMessageArgumentDataType)type, argCount);
-		totalArgCount += argCount;
 	}
 
+	// Read the arguments, in the order of the argument types.
 	GameMessageParserArgumentType *parserArgType = parser->getFirstArgumentType();
-	GameMessageArgumentDataType lasttype = ARGUMENTDATATYPE_UNKNOWN;
-	Int argsLeftForType = 0;
-	if (parserArgType != NULL) {
-		lasttype = parserArgType->getType();
-		argsLeftForType = parserArgType->getArgCount();
-	}
-	for (j = 0; j < totalArgCount; ++j) {
-		readGameMessageArgumentFromPacket(lasttype, msg, data, i);
-
-		--argsLeftForType;
-		if (argsLeftForType == 0) {
-			DEBUG_ASSERTCRASH(parserArgType != NULL, ("parserArgType was NULL when it shouldn't have been."));
-			if (parserArgType == NULL) {
-				return NULL;
-			}
-
-			parserArgType = parserArgType->getNext();
-			// parserArgType is allowed to be NULL here
-			if (parserArgType != NULL) {
-				argsLeftForType = parserArgType->getArgCount();
-				lasttype = parserArgType->getType();
+	while (success && parserArgType != NULL) {
+		GameMessageArgumentDataType argType = parserArgType->getType();
+		Int argCount = parserArgType->getArgCount();
+		for (Int k = 0; k < argCount; ++k) {
+			if (!readGameMessageArgumentFromPacket(argType, msg, reader)) {
+				success = FALSE;
+				break;
 			}
 		}
+		parserArgType = parserArgType->getNext();
 	}
 
 	parser->deleteInstance();
 	parser = NULL;
 
+	if (!success) {
+		reader.fail();
+		msg->detach();
+		return NULL;
+	}
+
 	return (NetCommandMsg *)msg;
 }
 
-void NetPacket::readGameMessageArgumentFromPacket(GameMessageArgumentDataType type, NetGameCommandMsg *msg, UnsignedByte *data, Int &i) {
+Bool NetPacket::readGameMessageArgumentFromPacket(GameMessageArgumentDataType type, NetGameCommandMsg *msg, NetPacketReader &reader) {
+	GameMessageArgumentType arg;
 	if (type == ARGUMENTDATATYPE_INTEGER) {
-		GameMessageArgumentType arg;
 		Int theint;
-		memcpy(&theint, data + i, sizeof(theint));
-		i += sizeof(theint);
+		if (!reader.read(&theint, sizeof(theint))) {
+			return FALSE;
+		}
 		arg.integer = theint;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_REAL) {
-		GameMessageArgumentType arg;
 		Real thereal;
-		memcpy(&thereal, data + i, sizeof(thereal));
-		i += sizeof(thereal);
+		if (!reader.read(&thereal, sizeof(thereal))) {
+			return FALSE;
+		}
 		arg.real = thereal;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_BOOLEAN) {
-		GameMessageArgumentType arg;
 		Bool thebool;
-		memcpy(&thebool, data + i, sizeof(thebool));
-		i += sizeof(thebool);
+		if (!reader.read(&thebool, sizeof(thebool))) {
+			return FALSE;
+		}
 		arg.boolean = thebool;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_OBJECTID) {
-		GameMessageArgumentType arg;
 		ObjectID theint;
-		memcpy(&theint, data + i, sizeof(theint));
-		i += sizeof(theint);
+		if (!reader.read(&theint, sizeof(theint))) {
+			return FALSE;
+		}
 		arg.objectID = theint;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_DRAWABLEID) {
-		GameMessageArgumentType arg;
 		DrawableID theint;
-		memcpy(&theint, data + i, sizeof(theint));
-		i += sizeof(theint);
+		if (!reader.read(&theint, sizeof(theint))) {
+			return FALSE;
+		}
 		arg.drawableID = theint;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_TEAMID) {
-		GameMessageArgumentType arg;
 		UnsignedInt theint;
-		memcpy(&theint, data + i, sizeof(theint));
-		i += sizeof(theint);
+		if (!reader.read(&theint, sizeof(theint))) {
+			return FALSE;
+		}
 		arg.teamID = theint;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_LOCATION) {
-		GameMessageArgumentType arg;
 		Coord3D coord;
-		memcpy(&coord, data + i, sizeof(coord));
-		i += sizeof(coord);
+		if (!reader.read(&coord, sizeof(coord))) {
+			return FALSE;
+		}
 		arg.location = coord;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_PIXEL) {
-		GameMessageArgumentType arg;
 		ICoord2D pixel;
-		memcpy(&pixel, data + i, sizeof(pixel));
-		i += sizeof(pixel);
+		if (!reader.read(&pixel, sizeof(pixel))) {
+			return FALSE;
+		}
 		arg.pixel = pixel;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_PIXELREGION) {
-		GameMessageArgumentType arg;
 		IRegion2D reg;
-		memcpy(&reg, data + i, sizeof(reg));
-		i += sizeof(reg);
+		if (!reader.read(&reg, sizeof(reg))) {
+			return FALSE;
+		}
 		arg.pixelRegion = reg;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_TIMESTAMP) {
-		GameMessageArgumentType arg;
 		UnsignedInt stamp;
-		memcpy(&stamp, data + i, sizeof(stamp));
-		i += sizeof(stamp);
+		if (!reader.read(&stamp, sizeof(stamp))) {
+			return FALSE;
+		}
 		arg.timestamp = stamp;
-		msg->addArgument(type, arg);
 	} else if (type == ARGUMENTDATATYPE_WIDECHAR) {
-		GameMessageArgumentType arg;
 		WideChar c;
-		memcpy(&c, data + i, sizeof(c));
-		i += sizeof(c);
+		if (!reader.read(&c, sizeof(c))) {
+			return FALSE;
+		}
 		arg.wChar = c;
-		msg->addArgument(type, arg);
+	} else {
+		reader.fail();
+		return FALSE;
 	}
+	msg->addArgument(type, arg);
+	return TRUE;
 }
 
 /**
  * Reads the data portion of the ack message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readAckBothMessage(UnsignedByte *data, Int &i) {
-	NetAckBothCommandMsg *msg = newInstance(NetAckBothCommandMsg);
-
+NetCommandMsg * NetPacket::readAckBothMessage(NetPacketReader &reader) {
 	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readAckMessage, "));
 	UnsignedShort cmdID = 0;
-
-	memcpy(&cmdID, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
-	msg->setCommandID(cmdID);
-	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
-
 	UnsignedByte origPlayerID = 0;
-	memcpy(&origPlayerID, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
-	msg->setOriginalPlayerID(origPlayerID);
+	if (!reader.read(&cmdID, sizeof(UnsignedShort)) || !reader.read(&origPlayerID, sizeof(UnsignedByte))) {
+		return NULL;
+	}
+	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
 	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("original player id = %d\n", origPlayerID));
 
+	NetAckBothCommandMsg *msg = newInstance(NetAckBothCommandMsg);
+	msg->setCommandID(cmdID);
+	msg->setOriginalPlayerID(origPlayerID);
+
 	return msg;
 }
 
 /**
  * Reads the data portion of the ack message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readAckStage1Message(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readAckStage1Message(NetPacketReader &reader) {
+//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readAckMessage, "));
+	UnsignedShort cmdID = 0;
+	UnsignedByte origPlayerID = 0;
+	if (!reader.read(&cmdID, sizeof(UnsignedShort)) || !reader.read(&origPlayerID, sizeof(UnsignedByte))) {
+		return NULL;
+	}
+//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
+//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("original player id = %d\n", origPlayerID));
+
 	NetAckStage1CommandMsg *msg = newInstance(NetAckStage1CommandMsg);
-
-//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readAckMessage, "));
-	UnsignedShort cmdID = 0;
-
-	memcpy(&cmdID, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
 	msg->setCommandID(cmdID);
-//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
-
-	UnsignedByte origPlayerID = 0;
-	memcpy(&origPlayerID, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
 	msg->setOriginalPlayerID(origPlayerID);
-//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("original player id = %d\n", origPlayerID));
 
 	return msg;
 }
@@ -5394,22 +5394,19 @@ NetCommandMsg * NetPacket::readAckStage1Message(UnsignedByte *data, Int &i) {
 /**
  * Reads the data portion of the ack message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readAckStage2Message(UnsignedByte *data, Int &i) {
-	NetAckStage2CommandMsg *msg = newInstance(NetAckStage2CommandMsg);
-
+NetCommandMsg * NetPacket::readAckStage2Message(NetPacketReader &reader) {
 //	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readAckMessage, "));
 	UnsignedShort cmdID = 0;
-
-	memcpy(&cmdID, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
-	msg->setCommandID(cmdID);
-//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
-
 	UnsignedByte origPlayerID = 0;
-	memcpy(&origPlayerID, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
-	msg->setOriginalPlayerID(origPlayerID);
+	if (!reader.read(&cmdID, sizeof(UnsignedShort)) || !reader.read(&origPlayerID, sizeof(UnsignedByte))) {
+		return NULL;
+	}
+//	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("commandID = %d, ", cmdID));
 //	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("original player id = %d\n", origPlayerID));
+
+	NetAckStage2CommandMsg *msg = newInstance(NetAckStage2CommandMsg);
+	msg->setCommandID(cmdID);
+	msg->setOriginalPlayerID(origPlayerID);
 
 	return msg;
 }
@@ -5417,16 +5414,16 @@ NetCommandMsg * NetPacket::readAckStage2Message(UnsignedByte *data, Int &i) {
 /**
  * Reads the data portion of the frame message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readFrameMessage(UnsignedByte *data, Int &i) {
-	NetFrameCommandMsg *msg = newInstance(NetFrameCommandMsg);
-
+NetCommandMsg * NetPacket::readFrameMessage(NetPacketReader &reader) {
 //	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readFrameMessage, "));
 	UnsignedShort cmdCount = 0;
-
-	memcpy(&cmdCount, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
-	msg->setCommandCount(cmdCount);
+	if (!reader.read(&cmdCount, sizeof(UnsignedShort))) {
+		return NULL;
+	}
 //	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("command count = %d, ", cmdCount));
+
+	NetFrameCommandMsg *msg = newInstance(NetFrameCommandMsg);
+	msg->setCommandCount(cmdCount);
 
 	return msg;
 }
@@ -5434,13 +5431,13 @@ NetCommandMsg * NetPacket::readFrameMessage(UnsignedByte *data, Int &i) {
 /**
  * Reads the player leave message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readPlayerLeaveMessage(UnsignedByte *data, Int &i) {
-	NetPlayerLeaveCommandMsg *msg = newInstance(NetPlayerLeaveCommandMsg);
-
+NetCommandMsg * NetPacket::readPlayerLeaveMessage(NetPacketReader &reader) {
 	UnsignedByte leavingPlayerID = 0;
+	if (!reader.read(&leavingPlayerID, sizeof(UnsignedByte))) {
+		return NULL;
+	}
 
-	memcpy(&leavingPlayerID, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
+	NetPlayerLeaveCommandMsg *msg = newInstance(NetPlayerLeaveCommandMsg);
 	msg->setLeavingPlayerID(leavingPlayerID);
 
 	return msg;
@@ -5449,18 +5446,15 @@ NetCommandMsg * NetPacket::readPlayerLeaveMessage(UnsignedByte *data, Int &i) {
 /**
  * Reads the run ahead metrics message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readRunAheadMetricsMessage(UnsignedByte *data, Int &i) {
-	NetRunAheadMetricsCommandMsg *msg = newInstance(NetRunAheadMetricsCommandMsg);
-
+NetCommandMsg * NetPacket::readRunAheadMetricsMessage(NetPacketReader &reader) {
 	Real averageLatency = (Real)0.2;
 	UnsignedShort averageFps = 30;
+	if (!reader.read(&averageLatency, sizeof(Real)) || !reader.read(&averageFps, sizeof(UnsignedShort))) {
+		return NULL;
+	}
 
-	memcpy(&averageLatency, data + i, sizeof(Real));
-	i += sizeof(Real);
+	NetRunAheadMetricsCommandMsg *msg = newInstance(NetRunAheadMetricsCommandMsg);
 	msg->setAverageLatency(averageLatency);
-
-	memcpy(&averageFps, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
 	msg->setAverageFps((Int)averageFps);
 	return msg;
 }
@@ -5468,17 +5462,15 @@ NetCommandMsg * NetPacket::readRunAheadMetricsMessage(UnsignedByte *data, Int &i
 /**
  * Reads the run ahead message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readRunAheadMessage(UnsignedByte *data, Int &i) {
-	NetRunAheadCommandMsg *msg = newInstance(NetRunAheadCommandMsg);
-
+NetCommandMsg * NetPacket::readRunAheadMessage(NetPacketReader &reader) {
 	UnsignedShort newRunAhead = 20;
-	memcpy(&newRunAhead, data + i, sizeof(UnsignedShort));
-	i += sizeof(UnsignedShort);
-	msg->setRunAhead(newRunAhead);
-
 	UnsignedByte newFrameRate = 30;
-	memcpy(&newFrameRate, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
+	if (!reader.read(&newRunAhead, sizeof(UnsignedShort)) || !reader.read(&newFrameRate, sizeof(UnsignedByte))) {
+		return NULL;
+	}
+
+	NetRunAheadCommandMsg *msg = newInstance(NetRunAheadCommandMsg);
+	msg->setRunAhead(newRunAhead);
 	msg->setFrameRate(newFrameRate);
 
 	return msg;
@@ -5487,14 +5479,15 @@ NetCommandMsg * NetPacket::readRunAheadMessage(UnsignedByte *data, Int &i) {
 /**
  * Reads the CRC info message at this position in the packet.
  */
-NetCommandMsg * NetPacket::readDestroyPlayerMessage(UnsignedByte *data, Int &i) {
-	NetDestroyPlayerCommandMsg *msg = newInstance(NetDestroyPlayerCommandMsg);
-
+NetCommandMsg * NetPacket::readDestroyPlayerMessage(NetPacketReader &reader) {
 	UnsignedInt newVal = 0;
-	memcpy(&newVal, data + i, sizeof(UnsignedInt));
-	i += sizeof(UnsignedInt);
-	msg->setPlayerIndex(newVal);
+	if (!reader.read(&newVal, sizeof(UnsignedInt))) {
+		return NULL;
+	}
 	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("Saw CRC of 0x%8.8X\n", newCRC));
+
+	NetDestroyPlayerCommandMsg *msg = newInstance(NetDestroyPlayerCommandMsg);
+	msg->setPlayerIndex(newVal);
 
 	return msg;
 }
@@ -5502,7 +5495,7 @@ NetCommandMsg * NetPacket::readDestroyPlayerMessage(UnsignedByte *data, Int &i) 
 /**
  * Reads the keep alive data, of which there is none.
  */
-NetCommandMsg * NetPacket::readKeepAliveMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readKeepAliveMessage(NetPacketReader &reader) {
 	NetKeepAliveCommandMsg *msg = newInstance(NetKeepAliveCommandMsg);
 
 	return msg;
@@ -5511,7 +5504,7 @@ NetCommandMsg * NetPacket::readKeepAliveMessage(UnsignedByte *data, Int &i) {
 /**
  * Reads the disconnect keep alive data, of which there is none.
  */
-NetCommandMsg * NetPacket::readDisconnectKeepAliveMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readDisconnectKeepAliveMessage(NetPacketReader &reader) {
 	NetDisconnectKeepAliveCommandMsg *msg = newInstance(NetDisconnectKeepAliveCommandMsg);
 
 	return msg;
@@ -5520,17 +5513,15 @@ NetCommandMsg * NetPacket::readDisconnectKeepAliveMessage(UnsignedByte *data, In
 /**
  * Reads the disconnect player data.  Which is the slot number of the player being disconnected.
  */
-NetCommandMsg * NetPacket::readDisconnectPlayerMessage(UnsignedByte *data, Int &i) {
-	NetDisconnectPlayerCommandMsg *msg = newInstance(NetDisconnectPlayerCommandMsg);
-
+NetCommandMsg * NetPacket::readDisconnectPlayerMessage(NetPacketReader &reader) {
 	UnsignedByte slot = 0;
-	memcpy(&slot, data + i, sizeof(slot));
-	i += sizeof(slot);
-	msg->setDisconnectSlot(slot);
-
 	UnsignedInt disconnectFrame = 0;
-	memcpy(&disconnectFrame, data + i, sizeof(disconnectFrame));
-	i += sizeof(disconnectFrame);
+	if (!reader.read(&slot, sizeof(slot)) || !reader.read(&disconnectFrame, sizeof(disconnectFrame))) {
+		return NULL;
+	}
+
+	NetDisconnectPlayerCommandMsg *msg = newInstance(NetDisconnectPlayerCommandMsg);
+	msg->setDisconnectSlot(slot);
 	msg->setDisconnectFrame(disconnectFrame);
 
 	return msg;
@@ -5539,7 +5530,7 @@ NetCommandMsg * NetPacket::readDisconnectPlayerMessage(UnsignedByte *data, Int &
 /**
  * Reads the packet router query data, of which there is none.
  */
-NetCommandMsg * NetPacket::readPacketRouterQueryMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readPacketRouterQueryMessage(NetPacketReader &reader) {
 	NetPacketRouterQueryCommandMsg *msg = newInstance(NetPacketRouterQueryCommandMsg);
 
 	return msg;
@@ -5548,31 +5539,50 @@ NetCommandMsg * NetPacket::readPacketRouterQueryMessage(UnsignedByte *data, Int 
 /**
  * Reads the packet router ack data, of which there is none.
  */
-NetCommandMsg * NetPacket::readPacketRouterAckMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readPacketRouterAckMessage(NetPacketReader &reader) {
 	NetPacketRouterAckCommandMsg *msg = newInstance(NetPacketRouterAckCommandMsg);
 
 	return msg;
 }
 
 /**
+ * Reads a length-prefixed wide character string.  Text longer than MAX_CHAT_TEXT_LENGTH is
+ * truncated; the whole string is still consumed from the packet.
+ */
+Bool NetPacket::readChatText(NetPacketReader &reader, UnicodeString &text) {
+	UnsignedByte length = 0;
+	if (!reader.read(&length, sizeof(UnsignedByte))) {
+		return FALSE;
+	}
+	UnsignedByte *src = reader.readInPlace(length * sizeof(UnsignedShort));
+	if (src == NULL) {
+		return FALSE;
+	}
+
+	Int textLength = length;
+	if (textLength > MAX_CHAT_TEXT_LENGTH) {
+		textLength = MAX_CHAT_TEXT_LENGTH;
+	}
+	UnsignedShort buffer[MAX_CHAT_TEXT_LENGTH + 1];
+	memcpy(buffer, src, textLength * sizeof(UnsignedShort));
+	buffer[textLength] = 0;
+
+	text.set(buffer);
+	return TRUE;
+}
+
+/**
  * Reads the disconnect chat data, which is just the string.
  */
-NetCommandMsg * NetPacket::readDisconnectChatMessage(UnsignedByte *data, Int &i) {
-	NetDisconnectChatCommandMsg *msg = newInstance(NetDisconnectChatCommandMsg);
-
-	UnsignedShort text[256];
-	UnsignedByte length;
-	memcpy(&length, data + i, sizeof(UnsignedByte));
-	++i;
-	memcpy(text, data + i, length * sizeof(UnsignedShort));
-	i += length * sizeof(UnsignedShort);
-	text[length] = 0;
-
+NetCommandMsg * NetPacket::readDisconnectChatMessage(NetPacketReader &reader) {
 	UnicodeString unitext;
-	unitext.set(text);
+	if (!readChatText(reader, unitext)) {
+		return NULL;
+	}
 
 	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readDisconnectChatMessage - read message, message is %ls\n", unitext.str()));
 
+	NetDisconnectChatCommandMsg *msg = newInstance(NetDisconnectChatCommandMsg);
 	msg->setText(unitext);
 	return msg;
 }
@@ -5580,26 +5590,16 @@ NetCommandMsg * NetPacket::readDisconnectChatMessage(UnsignedByte *data, Int &i)
 /**
  * Reads the chat data, which is just the string.
  */
-NetCommandMsg * NetPacket::readChatMessage(UnsignedByte *data, Int &i) {
-	NetChatCommandMsg *msg = newInstance(NetChatCommandMsg);
-
-	UnsignedShort text[256];
-	UnsignedByte length;
-	Int playerMask;
-	memcpy(&length, data + i, sizeof(UnsignedByte));
-	++i;
-	memcpy(text, data + i, length * sizeof(UnsignedShort));
-	i += length * sizeof(UnsignedShort);
-	text[length] = 0;
-	memcpy(&playerMask, data + i, sizeof(Int));
-	i += sizeof(Int);
-
-
+NetCommandMsg * NetPacket::readChatMessage(NetPacketReader &reader) {
 	UnicodeString unitext;
-	unitext.set(text);
+	Int playerMask = 0;
+	if (!readChatText(reader, unitext) || !reader.read(&playerMask, sizeof(Int))) {
+		return NULL;
+	}
 
 	//DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readChatMessage - read message, message is %ls\n", unitext.str()));
 
+	NetChatCommandMsg *msg = newInstance(NetChatCommandMsg);
 	msg->setText(unitext);
 	msg->setPlayerMask(playerMask);
 	return msg;
@@ -5608,17 +5608,15 @@ NetCommandMsg * NetPacket::readChatMessage(UnsignedByte *data, Int &i) {
 /**
  * Reads the disconnect vote data.  Which is the slot number of the player being disconnected.
  */
-NetCommandMsg * NetPacket::readDisconnectVoteMessage(UnsignedByte *data, Int &i) {
-	NetDisconnectVoteCommandMsg *msg = newInstance(NetDisconnectVoteCommandMsg);
-
+NetCommandMsg * NetPacket::readDisconnectVoteMessage(NetPacketReader &reader) {
 	UnsignedByte slot = 0;
-	memcpy(&slot, data + i, sizeof(slot));
-	i += sizeof(slot);
-	msg->setSlot(slot);
-
 	UnsignedInt voteFrame = 0;
-	memcpy(&voteFrame, data + i, sizeof(voteFrame));
-	i += sizeof(voteFrame);
+	if (!reader.read(&slot, sizeof(slot)) || !reader.read(&voteFrame, sizeof(voteFrame))) {
+		return NULL;
+	}
+
+	NetDisconnectVoteCommandMsg *msg = newInstance(NetDisconnectVoteCommandMsg);
+	msg->setSlot(slot);
 	msg->setVoteFrame(voteFrame);
 
 	return msg;
@@ -5627,176 +5625,168 @@ NetCommandMsg * NetPacket::readDisconnectVoteMessage(UnsignedByte *data, Int &i)
 /**
  * Reads the Progress data.  Which is the slot number of the player being disconnected.
  */
-NetCommandMsg * NetPacket::readProgressMessage(UnsignedByte *data, Int &i) {
-	NetProgressCommandMsg *msg = newInstance(NetProgressCommandMsg);
-
+NetCommandMsg * NetPacket::readProgressMessage(NetPacketReader &reader) {
 	UnsignedByte percentage = 0;
-	memcpy(&percentage, data + i, sizeof(UnsignedByte));
-	i += sizeof(UnsignedByte);
+	if (!reader.read(&percentage, sizeof(UnsignedByte))) {
+		return NULL;
+	}
+
+	NetProgressCommandMsg *msg = newInstance(NetProgressCommandMsg);
 	msg->setPercentage(percentage);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readLoadCompleteMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readLoadCompleteMessage(NetPacketReader &reader) {
 	NetCommandMsg *msg = newInstance(NetCommandMsg);
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readTimeOutGameStartMessage(UnsignedByte *data, Int &i) {
+NetCommandMsg * NetPacket::readTimeOutGameStartMessage(NetPacketReader &reader) {
 	NetCommandMsg *msg = newInstance(NetCommandMsg);
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readWrapperMessage(UnsignedByte *data, Int &i) {
-	NetWrapperCommandMsg *msg = newInstance(NetWrapperCommandMsg);
-
-	// get the wrapped command ID
+NetCommandMsg * NetPacket::readWrapperMessage(NetPacketReader &reader) {
 	UnsignedShort wrappedCommandID = 0;
-	memcpy(&wrappedCommandID, data + i, sizeof(wrappedCommandID));
-	msg->setWrappedCommandID(wrappedCommandID);
-	i += sizeof(wrappedCommandID);
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - wrapped command ID == %d\n", wrappedCommandID));
-
-	// get the chunk number.
 	UnsignedInt chunkNumber = 0;
-	memcpy(&chunkNumber, data + i, sizeof(chunkNumber));
-	msg->setChunkNumber(chunkNumber);
-	i += sizeof(chunkNumber);
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - chunk number = %d\n", chunkNumber));
-
-	// get the number of chunks
 	UnsignedInt numChunks = 0;
-	memcpy(&numChunks, data + i, sizeof(numChunks));
-	msg->setNumChunks(numChunks);
-	i += sizeof(numChunks);
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - number of chunks = %d\n", numChunks));
-
-	// get the total data length
 	UnsignedInt totalDataLength = 0;
-	memcpy(&totalDataLength, data + i, sizeof(totalDataLength));
-	msg->setTotalDataLength(totalDataLength);
-	i += sizeof(totalDataLength);
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - total data length = %d\n", totalDataLength));
-
-	// get the data length for this chunk
 	UnsignedInt dataLength = 0;
-	memcpy(&dataLength, data + i, sizeof(dataLength));
-	i += sizeof(dataLength);
-	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - data length = %d\n", dataLength));
-
 	UnsignedInt dataOffset = 0;
-	memcpy(&dataOffset, data + i, sizeof(dataOffset));
-	msg->setDataOffset(dataOffset);
-	i += sizeof(dataOffset);
+
+	reader.read(&wrappedCommandID, sizeof(wrappedCommandID));
+	reader.read(&chunkNumber, sizeof(chunkNumber));
+	reader.read(&numChunks, sizeof(numChunks));
+	reader.read(&totalDataLength, sizeof(totalDataLength));
+	reader.read(&dataLength, sizeof(dataLength));
+	reader.read(&dataOffset, sizeof(dataOffset));
+	if (reader.hasFailed()) {
+		return NULL;
+	}
+
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - wrapped command ID == %d\n", wrappedCommandID));
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - chunk number = %d\n", chunkNumber));
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - number of chunks = %d\n", numChunks));
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - total data length = %d\n", totalDataLength));
+	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - data length = %d\n", dataLength));
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - data offset = %d\n", dataOffset));
 
-	msg->setData(data + i, dataLength);
-	i += dataLength;
+	// Every chunk carries at least one byte and no more than a packet's worth of data.
+	if (totalDataLength == 0 || totalDataLength > MAX_WRAPPED_COMMAND_DATA_LENGTH
+		|| numChunks == 0 || numChunks > totalDataLength || chunkNumber >= numChunks
+		|| dataLength > MAX_PACKET_SIZE
+		|| dataOffset > totalDataLength || dataLength > totalDataLength - dataOffset) {
+		DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readWrapperMessage - invalid wrapper chunk, dropping\n"));
+		reader.fail();
+		return NULL;
+	}
+
+	UnsignedByte *chunkData = reader.readInPlace(dataLength);
+	if (chunkData == NULL) {
+		return NULL;
+	}
+
+	NetWrapperCommandMsg *msg = newInstance(NetWrapperCommandMsg);
+	msg->setWrappedCommandID(wrappedCommandID);
+	msg->setChunkNumber(chunkNumber);
+	msg->setNumChunks(numChunks);
+	msg->setTotalDataLength(totalDataLength);
+	msg->setDataOffset(dataOffset);
+	msg->setData(chunkData, dataLength);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileMessage(UnsignedByte *data, Int &i) {
-	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
+NetCommandMsg * NetPacket::readFileMessage(NetPacketReader &reader) {
 	char filename[_MAX_PATH];
-	char *c = filename;
-
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
-		++i;
+	if (!reader.readString(filename, sizeof(filename))) {
+		return NULL;
 	}
-	*c = 0;
-	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
 
 	UnsignedInt dataLength = 0;
-	memcpy(&dataLength, data + i, sizeof(dataLength));
-	i += sizeof(dataLength);
+	if (!reader.read(&dataLength, sizeof(dataLength))) {
+		return NULL;
+	}
 
-	UnsignedByte *buf = NEW UnsignedByte[dataLength];
-	memcpy(buf, data + i, dataLength);
-	i += dataLength;
+	UnsignedByte *fileData = reader.readInPlace(dataLength);
+	if (fileData == NULL) {
+		return NULL;
+	}
 
-	msg->setFileData(buf, dataLength);
+	NetFileCommandMsg *msg = newInstance(NetFileCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+
+	msg->setFileData(fileData, dataLength);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileAnnounceMessage(UnsignedByte *data, Int &i) {
-	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+NetCommandMsg * NetPacket::readFileAnnounceMessage(NetPacketReader &reader) {
 	char filename[_MAX_PATH];
-	char *c = filename;
-
-	while (data[i] != 0) {
-		*c = data[i];
-		++c;
-		++i;
-	}
-	*c = 0;
-	++i;
-	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
-
 	UnsignedShort fileID = 0;
-	memcpy(&fileID, data + i, sizeof(fileID));
-	i += sizeof(fileID);
-	msg->setFileID(fileID);
-
 	UnsignedByte playerMask = 0;
-	memcpy(&playerMask, data + i, sizeof(playerMask));
-	i += sizeof(playerMask);
+	if (!reader.readString(filename, sizeof(filename))
+		|| !reader.read(&fileID, sizeof(fileID))
+		|| !reader.read(&playerMask, sizeof(playerMask))) {
+		return NULL;
+	}
+
+	NetFileAnnounceCommandMsg *msg = newInstance(NetFileAnnounceCommandMsg);
+	msg->setPortableFilename(AsciiString(filename));	// it's transferred as a portable filename
+	msg->setFileID(fileID);
 	msg->setPlayerMask(playerMask);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFileProgressMessage(UnsignedByte *data, Int &i) {
-	NetFileProgressCommandMsg *msg = newInstance(NetFileProgressCommandMsg);
-
+NetCommandMsg * NetPacket::readFileProgressMessage(NetPacketReader &reader) {
 	UnsignedShort fileID = 0;
-	memcpy(&fileID, data + i, sizeof(fileID));
-	i += sizeof(fileID);
-	msg->setFileID(fileID);
-
 	Int progress = 0;
-	memcpy(&progress, data + i, sizeof(progress));
-	i += sizeof(progress);
+	if (!reader.read(&fileID, sizeof(fileID)) || !reader.read(&progress, sizeof(progress))) {
+		return NULL;
+	}
+
+	NetFileProgressCommandMsg *msg = newInstance(NetFileProgressCommandMsg);
+	msg->setFileID(fileID);
 	msg->setProgress(progress);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readDisconnectFrameMessage(UnsignedByte *data, Int &i) {
-	NetDisconnectFrameCommandMsg *msg = newInstance(NetDisconnectFrameCommandMsg);
-
+NetCommandMsg * NetPacket::readDisconnectFrameMessage(NetPacketReader &reader) {
 	UnsignedInt disconnectFrame = 0;
-	memcpy(&disconnectFrame, data + i, sizeof(disconnectFrame));
-	i += sizeof(disconnectFrame);
-	msg->setDisconnectFrame(disconnectFrame);
+	if (!reader.read(&disconnectFrame, sizeof(disconnectFrame))) {
+		return NULL;
+	}
 
 	DEBUG_LOG_LEVEL(DEBUG_LEVEL_NET, ("NetPacket::readDisconnectFrameMessage - read disconnect frame for frame %d\n", disconnectFrame));
+
+	NetDisconnectFrameCommandMsg *msg = newInstance(NetDisconnectFrameCommandMsg);
+	msg->setDisconnectFrame(disconnectFrame);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readDisconnectScreenOffMessage(UnsignedByte *data, Int &i) {
-	NetDisconnectScreenOffCommandMsg *msg = newInstance(NetDisconnectScreenOffCommandMsg);
-
+NetCommandMsg * NetPacket::readDisconnectScreenOffMessage(NetPacketReader &reader) {
 	UnsignedInt newFrame = 0;
-	memcpy(&newFrame, data + i, sizeof(newFrame));
-	i += sizeof(newFrame);
+	if (!reader.read(&newFrame, sizeof(newFrame))) {
+		return NULL;
+	}
+
+	NetDisconnectScreenOffCommandMsg *msg = newInstance(NetDisconnectScreenOffCommandMsg);
 	msg->setNewFrame(newFrame);
 
 	return msg;
 }
 
-NetCommandMsg * NetPacket::readFrameResendRequestMessage(UnsignedByte *data, Int &i) {
-	NetFrameResendRequestCommandMsg *msg = newInstance(NetFrameResendRequestCommandMsg);
-
+NetCommandMsg * NetPacket::readFrameResendRequestMessage(NetPacketReader &reader) {
 	UnsignedInt frameToResend = 0;
-	memcpy(&frameToResend, data + i, sizeof(frameToResend));
-	i += sizeof(frameToResend);
+	if (!reader.read(&frameToResend, sizeof(frameToResend))) {
+		return NULL;
+	}
+
+	NetFrameResendRequestCommandMsg *msg = newInstance(NetFrameResendRequestCommandMsg);
 	msg->setFrameToResend(frameToResend);
 
 	return msg;

@@ -106,8 +106,14 @@ void NetCommandWrapperListNode::copyChunkData(NetWrapperCommandMsg *msg) {
 		return;
 	}
 
-	m_chunksPresent[msg->getChunkNumber()] = TRUE;
 	UnsignedInt offset = msg->getDataOffset();
+	if (offset > m_dataLength || msg->getDataLength() > m_dataLength - offset) {
+		DEBUG_CRASH(("Wrapper chunk %d does not fit in the wrapped command, offset %d length %d total %d\n",
+			msg->getChunkNumber(), offset, msg->getDataLength(), m_dataLength));
+		return;
+	}
+
+	m_chunksPresent[msg->getChunkNumber()] = TRUE;
 	memcpy(m_data + offset, msg->getData(), msg->getDataLength());
 	++m_numChunksPresent;
 }
@@ -189,11 +195,17 @@ NetCommandList * NetCommandWrapperList::getReadyCommands()
 		next = temp->m_next;
 		if (temp->isComplete()) {
 			NetCommandRef *msg = NetPacket::ConstructNetCommandMsgFromRawData(temp->getRawData(), temp->getRawDataLength());
-			NetCommandRef *ret = retlist->addMessage(msg->getCommand());
-			ret->setRelay(msg->getRelay());
+			if (msg != NULL) {
+				NetCommandRef *ret = retlist->addMessage(msg->getCommand());
+				if (ret != NULL) {
+					ret->setRelay(msg->getRelay());
+				}
 
-			msg->deleteInstance();
-			msg = NULL;
+				msg->deleteInstance();
+				msg = NULL;
+			} else {
+				DEBUG_LOG(("NetCommandWrapperList::getReadyCommands - dropping malformed wrapped command %d\n", temp->getCommandID()));
+			}
 
 			removeFromList(temp);
 			temp = NULL;
